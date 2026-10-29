@@ -37,3 +37,17 @@ on CPU (EXP-01) and on a T4 GPU (EXP-02 onwards). Detection/segmentation caches 
 
 Copy `artifacts/cache_*` and the executed notebook back to the repository (or commit from the runtime) so results
 stay traceable. Never commit `kaggle.json` or any token.
+
+## EXP-02A/B (T3): raw detection caches on GPU
+
+```python
+!python scripts/run_exp02_inference.py --backbone base --limit 2   # smoke test (~1 min)
+!python scripts/run_exp02_inference.py --backbone base             # OWLv2 Base, 180 images x 5 views
+!python scripts/run_exp02_inference.py --backbone large            # OWLv2 Large (reused by T4)
+```
+
+Each image gets 5 forward passes (global + 2x2 tiles) over 183 text queries (120 official names + aliases); the four
+EXP-02A variants come out of the same pass. On CPU this takes ~70 s/img for Base (~3.5 h for 180 images), so run it
+on a T4. The runner resumes from `artifacts/cache_exp02/<backbone>/detections_<variant>.json.gz` (~7 MB per backbone),
+so a disconnected session can simply be re-run. Then copy `artifacts/cache_exp02/` back to the repository; the notebook
+`02_Perception_Ensemble_Tiling_EXP02.ipynb` runs from the cache on CPU.

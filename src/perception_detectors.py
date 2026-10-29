@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from src.config_and_seeds import resolve_device
+from src.config_and_seeds import build_prompt_aliases, resolve_device
 from src.lvis_evaluator import box_iou
 
 OWLV2_BASE = "google/owlv2-base-patch16-ensemble"
@@ -277,7 +277,7 @@ class OwlV2Detector:
     EXP-02A variants from one forward pass over the official names plus LVIS_PROMPT_ALIASES."""
 
     def __init__(self, categories: dict[int, str], model_id: str = OWLV2_BASE, device: str | None = None,
-                 min_score: float = DEFAULT_MIN_SCORE, nms_iou: float = NMS_IOU):
+                 min_score: float = DEFAULT_MIN_SCORE, nms_iou: float = NMS_IOU, aliases: dict[int, dict] | None = None):
         import torch
         from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
@@ -286,6 +286,8 @@ class OwlV2Detector:
         self.model_id, self.device, self.min_score, self.nms_iou = model_id, device, min_score, nms_iou
         self.category_ids = sorted(categories)
         self.prompts = [PROMPT_TEMPLATE.format(categories[c]) for c in self.category_ids]
+        self.query_table = build_query_table(aliases if aliases is not None else build_prompt_aliases(categories))
+        self.blocks = build_blocks(categories)
         self._torch = torch
         self.processor = Owlv2Processor.from_pretrained(model_id)
         self.model = Owlv2ForObjectDetection.from_pretrained(model_id).to(device).eval()
@@ -306,3 +308,24 @@ class OwlV2Detector:
             if clipped is not None:
                 detections.append(Detection(self.category_ids[label], float(score), clipped))
         return per_class_nms(detections, self.nms_iou)
+
+    def forward_scores(self, image) -> tuple[np.ndarray, np.ndarray]:
+        """One forward pass over the whole alias query table: sigmoid scores [boxes, queries] and xyxy boxes in
+        image pixels (same box decoding as HF post_process_object_detection on the padded square)."""
+        image = image.convert("RGB")
+        side = max(image.size)
+        inputs = self.processor(text=[list(self.query_table.prompts)], images=image,
+                                return_tensors="pt").to(self.device)
+        with self._torch.inference_mode():
+            outputs = self.model(**inputs)
+        scores = self._torch.sigmoid(outputs.logits[0]).float().cpu().numpy()
+        cx, cy, w, h = outputs.pred_boxes[0].float().cpu().numpy().T
+        boxes = np.stack([cx - 0.5 * w, cy - 0.5 * h, cx + 0.5 * w, cy + 0.5 * h], axis=1) * np.float32(side)
+        return scores, boxes
+
+    def detect_variants(self, image) -> dict[str, list[Detection]]:
+        """The four EXP-02A variants (single/chunked x raw/alias) from a single forward pass."""
+        width, height = image.size
+        scores, boxes = self.forward_scores(image)
+        return extract_variants(scores, boxes, self.query_table, self.category_ids, self.blocks, self.min_score,
+                                width, height, self.nms_iou)

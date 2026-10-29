@@ -6,6 +6,7 @@ and never touches development annotations.
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
@@ -67,18 +68,29 @@ def infer_scene(image_path, detector, segmenter, categories: dict[int, str], sco
 # --------------------------------------------------------------------------- detection cache
 
 
-def save_detection_cache(detections_by_image: dict[str, list[Detection]], path, meta: dict | None = None) -> Path:
+def save_detection_cache(detections_by_image: dict[str, list[Detection]], path, meta: dict | None = None,
+                         ndigits: int | None = None) -> Path:
+    """JSON detection cache; a '.gz' suffix gzips it and `ndigits` rounds scores/coordinates to keep it small."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    r = (lambda v: round(v, ndigits)) if ndigits is not None else (lambda v: v)
     payload = {"meta": meta or {}, "detections": {
-        key: [{"category_id": d.category_id, "score": d.score, "bbox": list(d.bbox), "source": d.source} for d in dets]
+        key: [{"category_id": d.category_id, "score": r(d.score), "bbox": [r(v) for v in d.bbox], "source": d.source}
+              for d in dets]
         for key, dets in detections_by_image.items()}}
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    text = json.dumps(payload)
+    if path.suffix == ".gz":
+        path.write_bytes(gzip.compress(text.encode("utf-8"), mtime=0))
+    else:
+        path.write_text(text, encoding="utf-8")
     return path
 
 
 def load_detection_cache(path) -> tuple[dict[str, list[Detection]], dict]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    path = Path(path)
+    text = gzip.decompress(path.read_bytes()).decode("utf-8") if path.suffix == ".gz" else path.read_text(
+        encoding="utf-8")
+    payload = json.loads(text)
     detections = {key: [Detection(d["category_id"], d["score"], tuple(d["bbox"]), d["source"]) for d in dets]
                   for key, dets in payload["detections"].items()}
     return detections, payload["meta"]

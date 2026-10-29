@@ -222,5 +222,23 @@ class TestTiledInference(unittest.TestCase):
         self.assertEqual({d.source for d in merged}, {"owlv2:global"})
 
 
+class TestCompressedDetectionCache(unittest.TestCase):
+    def test_gz_cache_round_trip_with_rounding_keeps_view_sources(self):
+        import tempfile
+        from pathlib import Path
+
+        from src import pipeline as pl
+
+        dets = {"tpi_0001": [Detection(3, 0.123456789, (1.234567, 2.0, 30.5, 40.0), "owlv2:tile2")], "test_0001": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pl.save_detection_cache(dets, Path(tmp) / "d.json.gz", meta={"image_sizes": {"x": [4, 3]}},
+                                           ndigits=4)
+            self.assertEqual(path.read_bytes()[:2], b"\x1f\x8b")  # gzip magic
+            loaded, meta = pl.load_detection_cache(path)
+        self.assertEqual(loaded, {"tpi_0001": [Detection(3, 0.1235, (1.2346, 2.0, 30.5, 40.0), "owlv2:tile2")],
+                                  "test_0001": []})
+        self.assertEqual(meta["image_sizes"], {"x": [4, 3]})
+
+
 if __name__ == "__main__":
     unittest.main()
