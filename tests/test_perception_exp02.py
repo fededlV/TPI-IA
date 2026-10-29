@@ -141,5 +141,86 @@ class TestSiblingSuppression(unittest.TestCase):
         self.assertEqual(len(kept), 4)  # same-class duplicates are per-class NMS's job, not this rule's
 
 
+class TestTileGeometry(unittest.TestCase):
+    def test_grid_is_four_overlapping_windows_covering_the_image(self):
+        tiles = pdet.tile_grid(640, 480, overlap=0.25)
+        self.assertEqual(tiles, [(0, 0, 366, 275), (274, 0, 640, 275), (0, 205, 366, 480), (274, 205, 640, 480)])
+        tw, th = tiles[0][2], tiles[0][3]
+        self.assertAlmostEqual((2 * tw - 640) / tw, 0.25, delta=0.01)  # horizontal overlap = 25% of tile side
+        self.assertAlmostEqual((2 * th - 480) / th, 0.25, delta=0.01)
+        covered = np.zeros((480, 640), dtype=bool)
+        for x1, y1, x2, y2 in tiles:
+            covered[y1:y2, x1:x2] = True
+        self.assertTrue(covered.all())
+
+    def test_project_box_moves_tile_coordinates_to_the_global_frame(self):
+        self.assertEqual(pdet.project_box((10.0, 5.0, 30.0, 25.0), (274, 205, 640, 480)), (284.0, 210.0, 304.0, 230.0))
+
+    def test_inner_edge_cut_is_flagged_but_image_borders_are_not(self):
+        tl = (0, 0, 366, 275)
+        self.assertTrue(pdet.touches_inner_edge((300.0, 40.0, 366.0, 80.0), tl, 640, 480, margin=3.0))
+        self.assertTrue(pdet.touches_inner_edge((300.0, 40.0, 364.0, 80.0), tl, 640, 480, margin=3.0))
+        self.assertTrue(pdet.touches_inner_edge((30.0, 200.0, 60.0, 275.0), tl, 640, 480, margin=3.0))
+        self.assertFalse(pdet.touches_inner_edge((0.0, 0.0, 50.0, 50.0), tl, 640, 480, margin=3.0))
+        self.assertFalse(pdet.touches_inner_edge((100.0, 100.0, 150.0, 150.0), tl, 640, 480, margin=3.0))
+        br = (274, 205, 640, 480)
+        self.assertFalse(pdet.touches_inner_edge((600.0, 440.0, 640.0, 480.0), br, 640, 480, margin=3.0))
+        self.assertTrue(pdet.touches_inner_edge((274.0, 300.0, 300.0, 320.0), br, 640, 480, margin=3.0))
+
+    def test_objects_narrower_than_the_overlap_band_always_have_a_clean_tile(self):
+        width, height, margin = 640, 480, 3.0
+        tiles = pdet.tile_grid(width, height)
+        # the property holds per axis: the horizontal band (92 px) and the vertical band (70 px) differ
+        w = (tiles[0][2] - tiles[1][0]) - 2 * margin - 1
+        h = (tiles[0][3] - tiles[2][1]) - 2 * margin - 1
+        for x in np.arange(0, width - w, 7.0):
+            for y in np.arange(0, height - h, 7.0):
+                box = (x, y, x + w, y + h)
+                clean = [t for t in tiles if t[0] <= x and t[1] <= y and box[2] <= t[2] and box[3] <= t[3]
+                         and not pdet.touches_inner_edge(box, t, width, height, margin)]
+                self.assertTrue(clean, f"{box} is cut by every tile")
+
+
+class _FakeVariantDetector:
+    """Returns, for every view, one 10x10 box at the view's top-left corner and one cut by the view's right edge."""
+
+    def __call__(self, image):
+        w, _ = image.size
+        dets = [Detection(1, 0.6, (0.0, 0.0, 10.0, 10.0)), Detection(2, 0.5, (w - 20.0, 30.0, float(w), 50.0))]
+        return {"single_raw": dets, "chunked_alias": dets[:1]}
+
+
+class TestTiledInference(unittest.TestCase):
+    def setUp(self):
+        from PIL import Image
+        self.image = Image.new("RGB", (640, 480))
+
+    def test_tile_detections_are_projected_and_tagged_by_view(self):
+        out = pdet.detect_with_tiles(self.image, _FakeVariantDetector())
+        self.assertEqual(set(out), {"single_raw", "chunked_alias"})
+        sources = sorted({d.source for d in out["single_raw"]})
+        self.assertEqual(sources, ["owlv2:global"] + [f"owlv2:tile{i}" for i in range(4)])
+        tile3 = [d for d in out["chunked_alias"] if d.source == "owlv2:tile3"]
+        self.assertEqual(tile3, [Detection(1, 0.6, (274.0, 205.0, 284.0, 215.0), "owlv2:tile3")])
+        self.assertEqual(pdet.view_index(tile3[0].source), 3)
+        self.assertIsNone(pdet.view_index("owlv2:global"))
+
+    def test_merge_keeps_subset_drops_truncated_and_deduplicates(self):
+        dets = pdet.detect_with_tiles(self.image, _FakeVariantDetector())["single_raw"]
+        merged = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2})
+        tile_cuts = [d for d in merged if d.category_id == 2 and d.source != "owlv2:global"]
+        # category 2 is cut at the inner right edge of tiles 0/2 -> dropped; on tiles 1/3 the right edge is the
+        # image border -> kept, and it duplicates the global box there (NMS keeps one).
+        self.assertTrue(all(pdet.view_index(d.source) in (1, 3) for d in tile_cuts))
+        self.assertEqual(len([d for d in merged if d.category_id == 2 and d.bbox == (620.0, 30.0, 640.0, 50.0)]), 1)
+        kept_raw = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2}, drop_truncated=False)
+        self.assertGreater(len(kept_raw), len(merged))
+
+    def test_merge_ignores_tiles_for_categories_outside_the_subset(self):
+        dets = pdet.detect_with_tiles(self.image, _FakeVariantDetector())["single_raw"]
+        merged = pdet.merge_views(dets, 640, 480, tile_category_ids=set())
+        self.assertEqual({d.source for d in merged}, {"owlv2:global"})
+
+
 if __name__ == "__main__":
     unittest.main()

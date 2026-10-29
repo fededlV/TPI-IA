@@ -1,12 +1,13 @@
-"""Open-vocabulary perception: OWLv2 detector (EXP-01 baseline, EXP-02A chunked prompting with LVIS aliases) and
-model-free post-processing helpers.
+"""Open-vocabulary perception: OWLv2 detector (EXP-01 baseline, EXP-02A chunked prompting with LVIS aliases),
+EXP-02B 2x2 overlapping tiles, and model-free post-processing helpers.
 
 The detector receives only the image and the 120-category vocabulary; it never reads annotations.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -20,6 +21,8 @@ DEFAULT_MIN_SCORE = 0.05  # raw cache floor; the operating threshold is tuned on
 NMS_IOU = 0.5
 MAX_DETECTIONS = 300
 SIBLING_IOU = 0.7
+TILE_OVERLAP = 0.25  # shared band = 25% of the tile side
+TILE_EDGE_MARGIN = 3.0  # px; boxes this close to an inner tile border are truncation artifacts
 
 # EXP-02A: 5 semantic blocks x 24 classes. Every sibling group lives inside one block, so the per-block argmax
 # arbitrates between look-alike classes on the same box.
@@ -200,6 +203,70 @@ def suppress_siblings(detections: list[Detection], groups: list[frozenset[int]],
                                 or box_iou(list(k.bbox), list(det.bbox)) < iou_threshold for k in kept):
             kept.append(det)
     return kept
+
+
+# --------------------------------------------------------------------------- EXP-02B: 2x2 overlapping tiles
+
+
+def tile_grid(width: int, height: int, overlap: float = TILE_OVERLAP) -> list[tuple[int, int, int, int]]:
+    """Four xyxy windows (row-major) whose shared band is `overlap` of the tile side: tile = dim / (2 - overlap)."""
+    tw, th = math.ceil(width / (2 - overlap)), math.ceil(height / (2 - overlap))
+    return [(x, y, x + tw, y + th) for y in (0, height - th) for x in (0, width - tw)]
+
+
+def project_box(box, tile) -> tuple[float, float, float, float]:
+    x0, y0 = tile[0], tile[1]
+    return (box[0] + x0, box[1] + y0, box[2] + x0, box[3] + y0)
+
+
+def touches_inner_edge(box, tile, width: int, height: int, margin: float = TILE_EDGE_MARGIN) -> bool:
+    """True if a global-frame box reaches a tile border that lies inside the image (a truncation artifact).
+    Borders shared with the image border never count: objects there are cut by the photo, not by the tiling."""
+    x1, y1, x2, y2 = box
+    tx1, ty1, tx2, ty2 = tile
+    return ((tx1 > 0 and x1 <= tx1 + margin) or (ty1 > 0 and y1 <= ty1 + margin)
+            or (tx2 < width and x2 >= tx2 - margin) or (ty2 < height and y2 >= ty2 - margin))
+
+
+def view_index(source: str) -> int | None:
+    """Tile index encoded in a detection source ('owlv2:tile2' -> 2); None for the global view."""
+    _, sep, idx = source.rpartition(":tile")
+    return int(idx) if sep else None
+
+
+def detect_with_tiles(image, detect_fn, base_source: str = "owlv2",
+                      overlap: float = TILE_OVERLAP) -> dict[str, list[Detection]]:
+    """Global pass + 4 tile passes of `detect_fn(image) -> {variant: detections}`. Tile boxes are projected to the
+    global frame [0, W] x [0, H] and tagged '<base>:tile<i>'; truncation filtering is left to merge_views."""
+    image = image.convert("RGB")
+    width, height = image.size
+    out = {variant: [replace(d, source=f"{base_source}:global") for d in dets]
+           for variant, dets in detect_fn(image).items()}
+    for i, tile in enumerate(tile_grid(width, height, overlap)):
+        for variant, dets in detect_fn(image.crop(tile)).items():
+            for d in dets:
+                box = clip_box(project_box(d.bbox, tile), width, height)
+                if box is not None:
+                    out[variant].append(replace(d, bbox=box, source=f"{base_source}:tile{i}"))
+    return out
+
+
+def merge_views(detections: list[Detection], width: int, height: int, tile_category_ids,
+                overlap: float = TILE_OVERLAP, edge_margin: float = TILE_EDGE_MARGIN, drop_truncated: bool = True,
+                nms_iou: float = NMS_IOU) -> list[Detection]:
+    """Global detections + tile detections of the selected (small/medium) categories, minus boxes cut by an inner
+    tile border, then per-class NMS across views."""
+    tiles = tile_grid(width, height, overlap)
+    kept = []
+    for d in detections:
+        idx = view_index(d.source)
+        if idx is not None:
+            if d.category_id not in tile_category_ids:
+                continue
+            if drop_truncated and touches_inner_edge(d.bbox, tiles[idx], width, height, edge_margin):
+                continue
+        kept.append(d)
+    return per_class_nms(kept, nms_iou)
 
 
 # --------------------------------------------------------------------------- detector
