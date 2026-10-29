@@ -1,4 +1,4 @@
-# EXP-02A/B — Chunked Prompting, LVIS Aliases and Selective 2×2 Tiling (Sections 1–2)
+# EXP-02 — Chunked Prompting, Selective 2×2 Tiling and a Calibrated Multi-Family Ensemble (Sections 1–5)
 
 **TPI Visual Scene Understanding — UTN Artificial Intelligence, Spring 2026 — Group 2**
 
@@ -11,7 +11,7 @@
 **Controlled design.**
 - Both ablations run on `CAL` (80 images, 1,231 GT instances). Each one changes one variable at a time against its own control arm.
 - Every arm gets its own CAL-optimal score threshold, so arms are compared at their best operating point, not at a threshold inherited from another arm.
-- `VAL` is never consulted here; the held-out comparison belongs to T4 (Section 3).
+- Sections 1–2 never consult `VAL`. Sections 3–5 (EXP-02C, T4) report `VAL` (40 images) as the held-out check, and never use it for selection.
 
 **Evaluation.**
 - Box-only LVIS federated matching (IoU ≥ 0.5), the exact rule of `lvis_evaluator.evaluate_federated`, computed per image (`box_match_details`).
@@ -19,4 +19,5 @@
 
 **Compute.**
 - The detections were produced on a **Kaggle Tesla T4** by `scripts/run_exp02_inference.py` (OWLv2 Base and OWLv2 Large) and cached in `artifacts/cache_exp02/`.
-- This notebook only reads those caches, so it runs on CPU in under a minute. `annotations.json` is used **only** for evaluation; the runner never opens it.
+- Sections 1–2 only read those caches, so they run on CPU in under a minute. `annotations.json` is used **only** for evaluation; the runners never open it.
+- Sections 3–5 add the MM-Grounding-DINO Large cache and SAM2.1 scenes. All of it was produced, and this notebook executed end to end, on a **Kaggle Tesla T4** via `notebooks/kaggle/T4_EXP02C_runner.ipynb`.

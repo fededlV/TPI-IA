@@ -1,0 +1,75 @@
+{
+  "selection": {
+    "rule": "max CAL Box F1; groups by CAL coordinate ascent",
+    "member_arm": "C6 calibrated WBF + self-collision rule",
+    "members": [
+      "owlv2b",
+      "mmgdino"
+    ],
+    "mmgdino_variant": "chunked_raw",
+    "config": "artifacts/cache_exp02/exp02c/config.json",
+    "config_sha": "912f09d78ec5dd6e",
+    "group_thresholds": {
+      "standard": 0.45,
+      "micro": 0.425,
+      "fp_prone": 0.45
+    },
+    "fp_prone": [],
+    "dry_run": false
+  },
+  "box_f1": {
+    "CAL/EXP-01 baseline": 0.6576,
+    "CAL/EXP-02A chunked prompting": 0.6596,
+    "CAL/EXP-02B + selective tiling": 0.6669,
+    "CAL/EXP-02C calibrated ensemble + anti-collision WBF": 0.7273,
+    "VAL/EXP-01 baseline": 0.6389,
+    "VAL/EXP-02A chunked prompting": 0.6364,
+    "VAL/EXP-02B + selective tiling": 0.6416,
+    "VAL/EXP-02C calibrated ensemble + anti-collision WBF": 0.6822
+  },
+  "val_deltas_f1": {
+    "EXP-02C - EXP-01": {
+      "delta": 0.0434,
+      "ci_low": 0.0132,
+      "ci_high": 0.0797
+    },
+    "EXP-02C - EXP-02B": {
+      "delta": 0.0406,
+      "ci_low": 0.0087,
+      "ci_high": 0.0787
+    }
+  },
+  "box_mask": {
+    "CAL/EXP-01 + SAM2.1 Base+": {
+      "Box F1": 0.6576,
+      "Mask F1": 0.64,
+      "0.40 Box + 0.35 Mask": 0.4871
+    },
+    "CAL/EXP-02C + SAM2.1 Base+": {
+      "Box F1": 0.7273,
+      "Mask F1": 0.7047,
+      "0.40 Box + 0.35 Mask": 0.5376
+    },
+    "VAL/EXP-01 + SAM2.1 Base+": {
+      "Box F1": 0.6389,
+      "Mask F1": 0.6198,
+      "0.40 Box + 0.35 Mask": 0.4725
+    },
+    "VAL/EXP-02C + SAM2.1 Base+": {
+      "Box F1": 0.6822,
+      "Mask F1": 0.6655,
+      "0.40 Box + 0.35 Mask": 0.5058
+    }
+  },
+  "suite": {
+    "test_1_blind_inference": "PASS",
+    "test_2_edge_cases": "PASS",
+    "test_3_relation_symmetry": "PASS",
+    "test_4_qa_integrity": "PASS",
+    "test_5_schema_compliance": "PASS",
+    "test_6_rle_mask_integrity": "PASS",
+    "test_7_csv_structure": "PASS",
+    "test_8_vram_budget": "PASS"
+  },
+  "vram_peak_mb": 8325.75244140625
+}
