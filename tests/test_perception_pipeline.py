@@ -101,6 +101,19 @@ class TestInferScene(unittest.TestCase):
         self.assertEqual(scene["objects"][0]["detector_source"], "owlv2")
         self.assertEqual(sb.validate_scene(scene, self.schema), [])
 
+    def test_fused_detection_lineage_keeps_raw_and_calibrated_scores(self):
+        from src.trace_logger import ExecutionTracer
+
+        image = Image.fromarray(np.zeros((40, 40, 3), dtype=np.uint8))
+        dets = [Detection(1, 0.7, (0, 0, 20, 20), "wbf:mmgdino+owlv2", raw_score=0.21), Detection(2, 0.4, (0, 0, 9, 9))]
+        tracer = ExecutionTracer()
+        pl.build_scene("img", image, dets, _FakeSegmenter().segment(image, [d.bbox for d in dets]), cfg.CATEGORIES,
+                       tracer)
+        first, second = tracer.object_lineage("img", "obj_000"), tracer.object_lineage("img", "obj_001")
+        self.assertEqual((first["raw_score"], first["calibrated_score"], first["detector_source"]),
+                         (0.21, 0.7, "wbf:mmgdino+owlv2"))
+        self.assertEqual((second["raw_score"], second["calibrated_score"]), (0.4, 0.4))  # uncalibrated detection
+
     def test_detection_cache_round_trip(self):
         dets = {"tpi_0001": [Detection(3, 0.25, (1.5, 2.0, 30.0, 40.0))], "test_0001": []}
         with tempfile.TemporaryDirectory() as tmp:

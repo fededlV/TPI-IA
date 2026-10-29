@@ -173,10 +173,12 @@ def apply_group_thresholds(detections: list[Detection], group_of: dict[int, str]
 
 @dataclass(frozen=True)
 class MemberSpec:
-    """One ensemble detector: family ('owlv2' | 'gdino'), checkpoint and the prompt variant it is read with."""
+    """One ensemble detector: family ('owlv2' | 'gdino'), checkpoint, the prompt variant it is read with and its raw
+    detection cache (path relative to the repository)."""
     family: str
     model_id: str
     variant: str
+    cache: str = ""
 
 
 @dataclass(frozen=True)
