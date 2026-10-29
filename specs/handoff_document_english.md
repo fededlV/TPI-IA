@@ -52,3 +52,35 @@ Execute tasks `T1` through `T8` sequentially using the exact prompts and `/effor
 ### Notes for T2
 - Pass `infer_fn(image_path) -> SceneJSON`, `qa_fn(scene, questions) -> answers` and `vram_peak_mb` to `run_full_verification_suite` to activate Tests 1, 2 (QA part) and 8.
 - The GT oracle F1 = 1.0 is self-consistent (same rasterizer on both sides); federated TP/FP/FN/ignore logic is covered by synthetic unit tests.
+
+---
+
+## 4. T2 Build Log (Claude Code — 2026-10-28, branch `feat/t2-qa-engine-baseline`)
+
+### Spec-Challenge Notes (T2 / S2)
+1. **Compute (resolved by human: local CPU venv):** no CUDA device on the workstation (Intel UHD, 4 cores, 14 GB RAM; system Python 3.14). A `uv` venv (Python 3.12, torch CPU) pinned in `requirements.txt` runs EXP-01; inference is cached under `artifacts/cache_exp01/` (~75 CPU-minutes for 180 images).
+2. **`Box F1 >= 0.45` is not guaranteed by construction** with OWLv2 Base + raw names; EXP-01 keeps aliases/chunking/tiling out (they are the EXP-02 variables). Only one global score threshold is tuned, on CAL; VAL is reported, never used for selection.
+3. **Test 8 (VRAM) on CPU:** `vram_peak_mb=None` → `SKIPPED` (never a fake `0`). "All 8 tests" = 0 FAIL with Test 8 SKIPPED until the Kaggle GPU run.
+4. **Relation semantics:** "any instance pair" as instructed; evidence = highest-confidence qualifying pair. GT has exactly one instance per class in all 10 relation questions, so GT verification is unambiguous; on predictions any-pair can say `yes` to a predicate and its inverse under FPs (top-confidence-pair is the T3+ alternative).
+5. **Missing class:** `relation`/`existence` → `"no"` (allowed answers are yes/no), `evidence=[]`; `position`/`size` → `"insufficient_information"` (prompt + suite Test 2).
+6. **`questions_llm` before the SLM (Prohibition 4):** `categories.csv` is English-only, so a generic 120-category Spanish lexicon (`CATEGORY_NAMES_ES`, validated for coverage and ambiguity) was added to `config_and_seeds.py`. A regex interpreter reads only the raw question text + vocabulary, emits `interpreted_query` (`source: rule_based_fallback`), and delegates to the deterministic engine.
+7. **No gold QA file:** "validate the 60 answers" = GT-derived expectations pinned in `tests/test_qa_engine.py` (counts from annotations, existence POS/NEG, position from GT centroids, size by thresholds, relations from GT centroids; 5 yes / 5 no).
+8. **EDA definition note:** 71.06% < 1% is reproduced from the COCO `area` field; PIL polygon rasterisation gives 70.34% (boundary pixels). Both are reported in the notebook.
+9. No `AGENTS.md`: runner `python -m unittest discover -s tests` (via `.venv/bin/python`).
+
+### Results (T2 / S2)
+- Unit tests: `.venv/bin/python -m unittest discover -s tests` → 60 OK (T1 contracts + QA engine + perception/pipeline, model-free).
+- QA engine on GT scenes: 40/40 closed answers match GT-derived expectations; rule-based `questions_llm` agrees 40/40.
+- EXP-01 (OWLv2 Base, raw names, threshold **0.175** = argmax CAL Box F1; SAM2.1 Base+ `multimask_output=False`):
+  - CAL Box F1 0.6576 / Mask F1 0.6400; VAL Box F1 0.6389 / Mask F1 0.6198; **DEV-120 Box F1 0.6518 / Mask F1 0.6338**; LVIS coverage 0.46; 0 bbox mask fallbacks over 5,592 objects.
+  - Box recall by size: small 0.499 / medium 0.742 / large 0.787 (~69% of FNs are small objects).
+  - Deterministic QA on predicted scenes: 30/40 (count 4/10, size 3/5, existence 9/10, relation 9/10, position 5/5); all misses are perception-propagated.
+  - CPU latency ≈ 21.6 s/img (11.9 det + 9.5 seg + 0.24 build); VRAM N/A (CPU).
+- `submissions/submission_exp01_baseline.csv` (80 rows): suite 7 PASS / Test 8 SKIPPED (no GPU) / **0 FAIL**.
+- Fresh-vs-cache OWLv2 check on `tpi_0003` and `test_0007`: bit-exact.
+
+### Notes for T3
+- Raw OWLv2 Base detections (score ≥ 0.05) for all 180 images are in `artifacts/cache_exp01/detections.json` (committed) — reuse as the EXP-01 reference in EXP-02A/B ablations without re-running.
+- `scenes_thr0.175.jsonl` (39 MB) is git-ignored; regenerate with `python scripts/run_exp01_inference.py segment --threshold 0.175`.
+- Run T3+ on a GPU (Kaggle recommended): models auto-select CUDA via `config_and_seeds.resolve_device()`; see `notebooks/README.md`. With CUDA, the notebook passes the traced VRAM peak to suite Test 8.
+- Biggest levers measured: small-object recall (tiling), grounding of archaic names (`strap`, `cabinet`; also `elephant` raw 0.088), nested duplicates / over-split instances (`flowerpot`, `pillow`, `handbag`) hurting counts.

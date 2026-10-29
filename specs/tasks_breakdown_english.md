@@ -25,6 +25,7 @@
 ---
 
 ### Task T2: Deterministic QA Engine + Notebook `01_EDA_and_Baseline_EXP01.ipynb` + Submission #1
+- **Status:** Done (2026-10-29, branch `feat/t2-qa-engine-baseline`; 60 unit tests OK; DEV Box F1 0.652 / Mask F1 0.634 at CAL threshold 0.175; suite 7 PASS / Test 8 SKIPPED on CPU / 0 FAIL). Commits: `ca8b235` (QA engine), `6f25a2f` (detector/segmenter/pipeline), `2519b13` (device auto-select), `9b77f8f` (notebook + submission), docs commit follows
 - **Maps to:** `S2`
 - **Dependencies:** `T1`
 - **Risk Tier:** High (First control submission to Kaggle)
