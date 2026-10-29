@@ -48,6 +48,18 @@ def set_global_seeds(seed: int = SEED) -> None:
     torch.backends.cudnn.benchmark = False
 
 
+def resolve_device() -> str:
+    """Inference device: TPI_DEVICE override, else CUDA when available (Colab/Kaggle), else CPU."""
+    override = os.environ.get("TPI_DEVICE")
+    if override:
+        return override
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 # --------------------------------------------------------------------------- paths
 
 

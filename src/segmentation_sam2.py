@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from src import scene_builder as sb
+from src.config_and_seeds import resolve_device
 
 SAM2_BASE_PLUS = "facebook/sam2.1-hiera-base-plus"
 BOX_CHUNK = 32
@@ -18,10 +19,11 @@ def guarantee_non_empty(mask: np.ndarray, box) -> tuple[np.ndarray, bool]:
 class Sam2Segmenter:
     """One image encoding per image, then box prompts decoded in chunks with a single mask per box."""
 
-    def __init__(self, model_id: str = SAM2_BASE_PLUS, device: str = "cpu", box_chunk: int = BOX_CHUNK):
+    def __init__(self, model_id: str = SAM2_BASE_PLUS, device: str | None = None, box_chunk: int = BOX_CHUNK):
         import torch
         from transformers import Sam2Model, Sam2Processor
 
+        device = device or resolve_device()
         self.name = f"sam2:{model_id}"
         self.model_id, self.device, self.box_chunk = model_id, device, box_chunk
         self._torch = torch

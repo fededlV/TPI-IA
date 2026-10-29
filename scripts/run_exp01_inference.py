@@ -45,7 +45,9 @@ def image_files(paths: cfg.DatasetPaths) -> list[Path]:
 def _environment() -> dict:
     import torch
 
-    return {"created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "device": "cpu",
+    device = cfg.resolve_device()
+    return {"created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "device": device,
+            "gpu": torch.cuda.get_device_name(0) if device == "cuda" else None,
             "torch": torch.__version__, "torch_threads": torch.get_num_threads(), "python": platform.python_version(),
             "machine": platform.processor() or platform.machine()}
 

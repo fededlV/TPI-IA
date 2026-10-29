@@ -58,6 +58,20 @@ class TestConfigAndSplit(unittest.TestCase):
         self.assertEqual(len(cal & set(self.qa_ids)), 10)
         self.assertEqual(len(val & set(self.qa_ids)), 10)
 
+    def test_resolve_device_prefers_env_override_then_cuda_availability(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"TPI_DEVICE": "cpu"}):
+            self.assertEqual(cfg.resolve_device(), "cpu")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TPI_DEVICE", None)
+            try:
+                import torch
+                expected = "cuda" if torch.cuda.is_available() else "cpu"
+            except ImportError:
+                expected = "cpu"
+            self.assertEqual(cfg.resolve_device(), expected)
+
     def test_split_is_deterministic(self):
         a = cfg.make_cal_val_split(self.annotations, self.qa_ids, seed=cfg.SEED)
         b = cfg.make_cal_val_split(self.annotations, self.qa_ids, seed=cfg.SEED)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.config_and_seeds import resolve_device
 from src.lvis_evaluator import box_iou
 
 OWLV2_BASE = "google/owlv2-base-patch16-ensemble"
@@ -53,11 +54,12 @@ def filter_detections(detections: list[Detection], score_threshold: float,
 class OwlV2Detector:
     """OWLv2 text-prompted detector over the official category names (aliases are reserved for EXP-02A)."""
 
-    def __init__(self, categories: dict[int, str], model_id: str = OWLV2_BASE, device: str = "cpu",
+    def __init__(self, categories: dict[int, str], model_id: str = OWLV2_BASE, device: str | None = None,
                  min_score: float = DEFAULT_MIN_SCORE, nms_iou: float = NMS_IOU):
         import torch
         from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
+        device = device or resolve_device()
         self.name = f"owlv2:{model_id}"
         self.model_id, self.device, self.min_score, self.nms_iou = model_id, device, min_score, nms_iou
         self.category_ids = sorted(categories)
