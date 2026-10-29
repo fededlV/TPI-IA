@@ -140,16 +140,17 @@ def load_categories(path: Path) -> dict[int, str]:
     return categories
 
 
-# Visual-friendly synonyms for archaic or ambiguous LVIS names, keyed by official name.
+# Visual-friendly synonyms for archaic or ambiguous LVIS names, keyed by official name. Every prompt must name
+# exactly one category (no "door handle" under both handle and doorknob, no bare "glasses"/"mouse"/"cap"/"sign").
 _ALIAS_OVERRIDES: dict[str, list[str]] = {
     "fireplug": ["fire hydrant"],
-    "spectacles": ["eyeglasses", "glasses"],
+    "spectacles": ["eyeglasses"],
     "television set": ["tv", "television"],
     "trash can": ["garbage can", "trash bin"],
-    "doorknob": ["door knob", "door handle"],
+    "doorknob": ["door knob", "round door knob"],
     "wall socket": ["electrical outlet", "power socket"],
     "flowerpot": ["plant pot", "flower pot"],
-    "signboard": ["sign", "billboard"],
+    "signboard": ["shop sign", "billboard"],
     "trousers": ["pants"],
     "short pants": ["shorts"],
     "jean": ["jeans", "denim pants"],
@@ -158,23 +159,23 @@ _ALIAS_OVERRIDES: dict[str, list[str]] = {
     "cell phone": ["mobile phone", "smartphone"],
     "computer monitor": ["monitor", "computer screen"],
     "computer keyboard": ["keyboard"],
-    "computer mouse": ["mouse"],
-    "drinking glass": ["glass cup", "tumbler"],
+    "computer mouse": ["wireless mouse"],
+    "drinking glass": ["water glass", "tumbler"],
     "flower arrangement": ["bouquet", "flowers in vase"],
     "streetlight": ["street lamp", "lamppost"],
     "taillight": ["tail light", "car rear light"],
     "headlight": ["car headlight"],
     "necktie": ["tie"],
-    "jersey": ["sports jersey", "t-shirt"],
+    "jersey": ["sports jersey"],
     "tag": ["label tag", "price tag"],
-    "strap": ["shoulder strap", "watch strap"],
+    "strap": ["shoulder strap", "bag strap"],
     "vent": ["air vent"],
     "awning": ["canopy"],
     "banner": ["hanging banner"],
     "sofa": ["couch"],
     "handbag": ["purse"],
     "watch": ["wristwatch"],
-    "baseball cap": ["cap"],
+    "baseball cap": ["sports cap"],
     "ski boot": ["ski boots"],
     "plastic bag": ["shopping bag"],
     "teddy bear": ["stuffed toy bear"],
@@ -182,7 +183,7 @@ _ALIAS_OVERRIDES: dict[str, list[str]] = {
     "license plate": ["number plate"],
     "street sign": ["road sign"],
     "button": ["clothing button"],
-    "pole": ["post"],
+    "pole": ["metal pole"],
     "motorcycle": ["motorbike"],
     "airplane": ["plane", "aircraft"],
     "bicycle": ["bike"],
@@ -198,10 +199,13 @@ def build_prompt_aliases(categories: dict[int, str],
     unknown = sorted(set(overrides) - known)
     if unknown:
         raise ValueError(f"Alias overrides reference unknown categories: {unknown}")
-    aliases = {}
+    aliases, owner = {}, {}
     for cid, name in sorted(categories.items()):
-        prompts = [name] + [s for s in overrides.get(name, []) if s != name]
-        aliases[cid] = {"name": name, "prompts": list(dict.fromkeys(prompts))}
+        prompts = list(dict.fromkeys([name] + overrides.get(name, [])))
+        for prompt in prompts:
+            if owner.setdefault(prompt, cid) != cid:
+                raise ValueError(f"Prompt {prompt!r} is ambiguous: categories {owner[prompt]} and {cid}")
+        aliases[cid] = {"name": name, "prompts": prompts}
     return aliases
 
 
