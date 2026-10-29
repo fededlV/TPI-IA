@@ -42,7 +42,7 @@
 ---
 
 ### Task T3: Perception `EXP-02A/B` — Chunked Prompting, LVIS Aliases, and 2×2 Tiling
-- **Status:** Implemented (2026-10-29, branch `feat/t3-perception-chunk-tiling`; 86 unit tests OK; OWLv2 Base + Large caches from a Kaggle T4). **S3 partially met — pending human acceptance:** CAL small-object Box Recall +6.9 pp vs EXP-01 (95% CI [+5.1, +8.7], significant); CAL Box F1 0.6576 -> 0.6669 (+0.0093, CI [-0.0024, +0.0210], not significant at 95%). Commits: `e241dca` (spec-challenge notes), `fb1b0d5` (chunked prompting + aliases), `1303309` (2x2 tiling), `b46ff23` (GPU runner), `e7efe7c` (per-image matching + per-view tile policy), `2d82181` (notebook + caches), docs commit follows
+- **Status:** Done — S3 accepted as partially met by Fede on 2026-10-29 (2026-10-29, branch `feat/t3-perception-chunk-tiling`; 86 unit tests OK; OWLv2 Base + Large caches from a Kaggle T4). **S3 partially met (accepted):** CAL small-object Box Recall +6.9 pp vs EXP-01 (95% CI [+5.1, +8.7], significant); CAL Box F1 0.6576 -> 0.6669 (+0.0093, CI [-0.0024, +0.0210], not significant at 95%). Commits: `e241dca` (spec-challenge notes), `fb1b0d5` (chunked prompting + aliases), `1303309` (2x2 tiling), `b46ff23` (GPU runner), `e7efe7c` (per-image matching + per-view tile policy), `2d82181` (notebook + caches), docs commit follows
 - **Maps to:** `S3`
 - **Dependencies:** `T2`
 - **Risk Tier:** Medium
