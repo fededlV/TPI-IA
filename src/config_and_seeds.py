@@ -193,6 +193,72 @@ def build_prompt_aliases(categories: dict[int, str],
     return aliases
 
 
+# Generic Spanish vocabulary for the 120 categories (first entry = canonical Spanish name), keyed by official
+# name. Used to verbalize answers and to map Spanish question text to category ids without structured fields.
+CATEGORY_NAMES_ES: dict[str, list[str]] = {
+    "sofa": ["sofá", "sillón"], "laptop": ["computadora portátil", "laptop", "notebook"],
+    "pillow": ["almohada", "almohadón", "cojín"], "bench": ["banco", "banca"],
+    "jacket": ["chaqueta", "campera", "chamarra"], "signboard": ["cartel", "letrero"], "backpack": ["mochila"],
+    "traffic light": ["semáforo"], "umbrella": ["paraguas", "sombrilla"], "horse": ["caballo"],
+    "handle": ["mango", "manija", "asa"], "chair": ["silla"], "clock": ["reloj"], "napkin": ["servilleta"],
+    "pizza": ["pizza"], "flag": ["bandera"], "person": ["persona"], "trousers": ["pantalones", "pantalón"],
+    "trash can": ["cesto de basura", "tacho de basura", "bote de basura", "papelera"],
+    "sock": ["calcetín", "media"], "vase": ["jarrón", "florero"], "bicycle": ["bicicleta"],
+    "tennis racket": ["raqueta de tenis"], "necklace": ["collar"],
+    "cell phone": ["teléfono celular", "celular", "teléfono móvil"], "book": ["libro"],
+    "sunglasses": ["gafas de sol", "anteojos de sol", "lentes de sol"], "lamp": ["lámpara"],
+    "bottle": ["botella"], "glove": ["guante"], "shoe": ["zapato"], "blanket": ["manta", "frazada", "cobija"],
+    "computer keyboard": ["teclado de computadora", "teclado"], "dog": ["perro"],
+    "jean": ["jean", "jeans", "vaquero"], "short pants": ["pantalones cortos", "pantalón corto", "shorts"],
+    "flower arrangement": ["arreglo floral", "ramo de flores"], "ski": ["esquí"], "cat": ["gato"],
+    "wheel": ["rueda"], "faucet": ["grifo", "canilla"], "helmet": ["casco"], "table": ["mesa"],
+    "drinking glass": ["vaso"], "headlight": ["faro delantero", "faro"],
+    "streetlight": ["farola", "poste de luz", "farol"], "television set": ["televisor", "televisión", "tele"],
+    "belt": ["cinturón"], "bird": ["pájaro", "ave"], "knife": ["cuchillo"], "watch": ["reloj de pulsera"],
+    "handbag": ["bolso", "cartera"], "street sign": ["señal de tránsito", "señal de calle", "cartel de calle"],
+    "bowl": ["cuenco", "tazón", "bol"], "ski pole": ["bastón de esquí"], "hat": ["sombrero"],
+    "plate": ["plato"], "car": ["auto", "coche", "carro"], "curtain": ["cortina"], "elephant": ["elefante"],
+    "bed": ["cama"], "drawer": ["cajón"], "earring": ["arete", "pendiente", "aro"],
+    "boat": ["bote", "barco", "embarcación"], "necktie": ["corbata"], "skateboard": ["patineta", "monopatín"],
+    "wall socket": ["tomacorriente", "enchufe de pared", "enchufe"], "fork": ["tenedor"],
+    "bus": ["autobús", "colectivo", "ómnibus"], "giraffe": ["jirafa"], "toilet": ["inodoro", "retrete"],
+    "surfboard": ["tabla de surf"], "motorcycle": ["motocicleta", "moto"], "cabinet": ["gabinete", "armario"],
+    "taillight": ["luz trasera", "faro trasero"], "train": ["tren"], "baseball cap": ["gorra de béisbol", "gorra"],
+    "airplane": ["avión"], "jersey": ["camiseta deportiva", "jersey", "camiseta"], "pole": ["poste"],
+    "doorknob": ["pomo de puerta", "picaporte", "perilla de puerta"],
+    "baseball bat": ["bate de béisbol", "bate"], "shirt": ["camisa"],
+    "license plate": ["matrícula", "placa", "patente"], "banana": ["banana", "plátano"], "mirror": ["espejo"],
+    "kite": ["cometa", "barrilete", "papalote"], "frisbee": ["frisbee", "disco volador"],
+    "sink": ["lavabo", "lavamanos", "pileta", "fregadero"], "spectacles": ["gafas", "anteojos", "lentes"],
+    "button": ["botón"], "goggles": ["gafas protectoras", "antiparras", "goggles"], "zebra": ["cebra"],
+    "suitcase": ["maleta", "valija"], "baseball glove": ["guante de béisbol"], "basket": ["canasta", "cesta"],
+    "refrigerator": ["refrigerador", "heladera", "nevera"], "ski boot": ["bota de esquí"],
+    "tablecloth": ["mantel"], "bracelet": ["pulsera", "brazalete"], "teddy bear": ["oso de peluche"],
+    "windshield wiper": ["limpiaparabrisas"],
+    "computer mouse": ["mouse de computadora", "ratón de computadora", "mouse", "ratón"], "box": ["caja"],
+    "cup": ["taza"], "dress": ["vestido"], "computer monitor": ["monitor de computadora", "monitor"],
+    "broccoli": ["brócoli"], "strap": ["correa"], "knob": ["perilla"],
+    "plastic bag": ["bolsa de plástico", "bolsa plástica"], "ring": ["anillo"], "awning": ["toldo"],
+    "vent": ["rejilla de ventilación", "ventilación"], "banner": ["pancarta", "estandarte"], "cow": ["vaca"],
+    "flowerpot": ["maceta"], "tag": ["etiqueta"], "fireplug": ["hidrante", "boca de incendio"], "boot": ["bota"],
+}
+
+
+def build_spanish_names(categories: dict[int, str],
+                        names_es: dict[str, list[str]] | None = None) -> dict[int, list[str]]:
+    """Map every category_id to its Spanish names; fails fast on missing, unknown or ambiguous entries."""
+    names_es = CATEGORY_NAMES_ES if names_es is None else names_es
+    known = set(categories.values())
+    if set(names_es) != known:
+        raise ValueError(f"Spanish names mismatch: missing={sorted(known - set(names_es))}, "
+                         f"unknown={sorted(set(names_es) - known)}")
+    owners = Counter(term for terms in names_es.values() for term in terms)
+    ambiguous = sorted(t for t, n in owners.items() if n > 1)
+    if ambiguous:
+        raise ValueError(f"Spanish names shared by several categories: {ambiguous}")
+    return {cid: list(names_es[name]) for cid, name in sorted(categories.items())}
+
+
 def size_from_area_ratio(area_ratio: float) -> str:
     if area_ratio < SMALL_MAX_AREA_RATIO:
         return "small"
@@ -283,3 +349,4 @@ except FileNotFoundError:
 
 CATEGORIES: dict[int, str] = load_categories(_PATHS_FOR_ALIASES.categories) if _PATHS_FOR_ALIASES else {}
 LVIS_PROMPT_ALIASES: dict[int, dict] = build_prompt_aliases(CATEGORIES) if CATEGORIES else {}
+CATEGORIES_ES: dict[int, list[str]] = build_spanish_names(CATEGORIES) if CATEGORIES else {}
