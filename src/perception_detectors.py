@@ -65,6 +65,7 @@ class Detection:
     score: float
     bbox: tuple[float, float, float, float]  # xyxy, absolute pixels inside the image
     source: str = "owlv2"
+    raw_score: float | None = None  # detector score before EXP-02C calibration/fusion (lineage); None = uncalibrated
 
 
 @dataclass(frozen=True)
