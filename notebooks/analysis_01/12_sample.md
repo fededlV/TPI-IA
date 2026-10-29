@@ -1,0 +1,6 @@
+**Analysis — `sample_submission.csv` as an executable specification.**
+
+- **Shape and order:** 80 rows = 60 test rows in exactly the order of `test_images.csv`, followed by the 20 development images that carry QA prompts (`tpi_0001…tpi_0012, tpi_0014, tpi_0015, tpi_0019, tpi_0020, tpi_0022–tpi_0025`). Our submission copies this order verbatim from the sample instead of re-deriving it.
+- **RLE convention reverse-engineered from the sample:** the 1-pixel mask at `(0, 0)` is encoded as `counts = [0, 1, 271999]` with `size = [640, 425]` (`[H, W]`). The leading `0` proves that counts always start with the run of *zeros* (here of length 0), and `decode → encode` round-trips byte-identically with our `scene_builder` implementation (column-major / Fortran order).
+- **Centroid units:** the same object has `centroid = [0, 0]` and `position = top_left`, i.e. centroids are absolute pixel indices of the mask (mean x, mean y), not normalised coordinates — our geometry follows this.
+- **Suite on the sample (structural mode):** Tests 3–7 `PASS`. Test 1 (blind inference) and the QA half of Test 2 are `SKIPPED/PARTIAL` because the sample has no inference function or QA engine attached; Test 8 is `SKIPPED` without a VRAM measurement. Section 4 runs the same suite on our submission **with** those hooks, which is the real acceptance gate.

@@ -1,0 +1,23 @@
+{
+  "segmenter": "facebook/sam2.1-hiera-base-plus",
+  "multimask_output": false,
+  "score_threshold": 0.175,
+  "detections_meta": {
+    "model": "google/owlv2-base-patch16-ensemble",
+    "prompt_template": "a photo of a {}",
+    "min_score": 0.05,
+    "nms_iou": 0.5,
+    "created_at": "2026-10-29T01:56:37+00:00",
+    "device": "cpu",
+    "torch": "2.15.0+cpu",
+    "torch_threads": 2,
+    "python": "3.12.12",
+    "machine": "x86_64"
+  },
+  "created_at": "2026-10-29T03:00:48+00:00",
+  "device": "cpu",
+  "torch": "2.15.0+cpu",
+  "torch_threads": 2,
+  "python": "3.12.12",
+  "machine": "x86_64"
+}

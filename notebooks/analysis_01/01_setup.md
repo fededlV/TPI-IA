@@ -1,0 +1,5 @@
+**Analysis — environment and reproducibility.**
+
+- The run is fully pinned: Python 3.12, `torch` CPU build and `transformers` 5.x (exact versions in `requirements.txt`), `SEED = 42` applied to `random`, `numpy` and `torch` (`cudnn.deterministic` would also be forced on a GPU). `HF_HUB_OFFLINE=1` guarantees the weights come from the local cache that produced the inference caches, not from a silently updated Hub revision.
+- `CUDA available: False` is the expected state of this workstation. It has two consequences that the rest of the notebook makes explicit instead of hiding: (1) all `ms/img` values are CPU latencies and are **not** representative of the Kaggle T4 budget, and (2) VRAM cannot be measured, so it is reported as `N/A (CPU)` rather than as a fabricated `0`.
+- `annotations.json` is loaded here *only* for EDA and evaluation. The inference entry point (`src/pipeline.infer_scene`) receives an image path plus the models, so the ground truth is physically outside its call graph; Section 4 proves this with the suite's audit hook.
