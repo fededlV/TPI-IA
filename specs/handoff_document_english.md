@@ -114,3 +114,35 @@ Execute tasks `T1` through `T8` sequentially using the exact prompts and `/effor
 - **Do not assume OWLv2 Large is the stronger family member:** it is significantly worse than Base here and 4.3x slower. Decide on CAL/VAL.
 - Precision is now the bottleneck: calibrate scores per detector **and per view** (global vs tile) and let WBF/cross-view consensus promote corroborated boxes; this is the most likely route to a significant F1 gain.
 - For MM-GDINO the 5 x 24 blocks are mandatory (256-token text limit); re-test aliases there (BERT encoder). Candidate sibling pair: `computer monitor` / `television set`.
+
+---
+
+## 6. T4 Build Log (Claude Code — 2026-10-29, branch `feat/t3-perception-chunk-tiling`)
+
+### Spec-Challenge Notes (T4 / S4)
+1. **OWLv2 member chosen on CAL, not by name (non-blocking):** S4 names `OWLv2 Large`, but T3 measured Large
+   significantly below Base (F1 -0.032, CI [-0.056, -0.008]). The ensemble evaluates {Base, Large, Base+Large} x
+   MM-GDINO and selects by max CAL Box F1; VAL is only reported.
+2. **MM-GDINO checkpoint (non-blocking):** `openmmlab-community/mm_grounding_dino_large_o365v2_oiv6_goldg` (Swin-L,
+   zero-shot). `*_large_all` is excluded: its pre-training includes COCO/LVIS-family data, weakening the zero-shot
+   claim. `IDEA-Research/grounding-dino-base` stays selectable in the runner as a fallback.
+3. **YOLO-Worldv2-X skipped (non-blocking):** needs `ultralytics` (new AGPL dependency, Risk item 5) with no HF path;
+   S4 does not require it and the deadline is 2026-10-31.
+4. **S4 bar is weak (non-blocking):** EXP-01 already reaches VAL Box F1 0.639 > 0.60. The reported claim is EXP-02C vs
+   EXP-01 and vs EXP-02B on VAL as paired 95% bootstrap CIs.
+5. **Segmentation unchanged (non-blocking):** SAM2.1 Base+ with `multimask_output=False` as in EXP-01, so the Mask F1
+   change is attributable to the boxes; multimask / Large belongs to T5.
+6. **Definitions:** "same detector, same view" = identical `Detection.source` (`owlv2:global`, `mmgdino:tile2`);
+   "high-confidence" = calibrated score >= 0.50 (canonical); fused score = sum over detectors of their best member's
+   calibrated score / number of ensemble detectors (single-family boxes are halved, consensus is promoted).
+7. **Calibration per (detector, view kind in {global, tile})**, since T3 showed the views have different scales.
+8. **Sensitivity groups from CAL only, frozen to JSON:** `micro` = CAL GT median `area_ratio < 0.0035`; `fp_prone` =
+   >= 3 verified neg-FPs on CAL with neg share >= 50% at the canonical threshold (priority over micro); `standard` =
+   the rest, including categories absent from CAL.
+9. **Edit surfaces beyond the T4 list (same pattern as T3):** new `src/detection_fusion.py` (keeps
+   `perception_detectors.py` < 400 lines), `tests/test_detection_fusion.py`, `tests/test_perception_exp02.py`,
+   `scripts/run_exp02_inference.py`, new `scripts/run_exp02c_segmentation.py`, `scripts/build_notebook_02.py`,
+   `notebooks/analysis_02/*.md`, `notebooks/README.md`, new `notebooks/kaggle/T4_EXP02C_runner.ipynb`, `.gitignore`.
+10. **Lineage:** `Detection` gains `raw_score: float | None = None` (last field); existing caches load unchanged.
+11. **Compute:** MM-GDINO inference and SAM2 run on a Kaggle/Colab T4 (the workstation has no CUDA); the GDINO forward
+    path has no local automated test (Risk item 6), mitigated by a `--limit 2` smoke run before the full pass.
