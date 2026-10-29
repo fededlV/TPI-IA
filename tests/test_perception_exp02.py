@@ -216,6 +216,17 @@ class TestTiledInference(unittest.TestCase):
         kept_raw = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2}, drop_truncated=False)
         self.assertGreater(len(kept_raw), len(merged))
 
+    def test_tile_views_have_their_own_threshold_and_size_gate(self):
+        dets = [Detection(1, 0.20, (100.0, 100.0, 110.0, 110.0), "owlv2:global"),
+                Detection(2, 0.20, (100.0, 100.0, 110.0, 110.0), "owlv2:tile0"),   # below the tile threshold
+                Detection(3, 0.40, (100.0, 100.0, 110.0, 110.0), "owlv2:tile0"),   # small -> kept
+                Detection(4, 0.40, (10.0, 10.0, 300.0, 250.0), "owlv2:tile0")]     # large (0.23 of the image)
+        merged = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2, 3, 4}, tile_min_score=0.3,
+                                  tile_max_area_ratio=0.035)
+        self.assertEqual(sorted(d.category_id for d in merged), [1, 3])
+        loose = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2, 3, 4})
+        self.assertEqual(sorted(d.category_id for d in loose), [1, 2, 3, 4])  # defaults keep the old behavior
+
     def test_merge_ignores_tiles_for_categories_outside_the_subset(self):
         dets = pdet.detect_with_tiles(self.image, _FakeVariantDetector())["single_raw"]
         merged = pdet.merge_views(dets, 640, 480, tile_category_ids=set())
@@ -238,6 +249,38 @@ class TestCompressedDetectionCache(unittest.TestCase):
         self.assertEqual(loaded, {"tpi_0001": [Detection(3, 0.1235, (1.2346, 2.0, 30.5, 40.0), "owlv2:tile2")],
                                   "test_0001": []})
         self.assertEqual(meta["image_sizes"], {"x": [4, 3]})
+
+
+class TestPerImageBoxMatching(unittest.TestCase):
+    """Per-image TP/FP/FN and per-GT match flags feed the paired bootstrap and the recall-by-size breakdown."""
+
+    GT = {"a": {"height": 100, "width": 100, "categories": [1, 1, 2], "boxes": [[0, 0, 10, 10], [50, 50, 60, 60],
+                                                                                [20, 20, 40, 40]],
+                "masks": [None] * 3, "pos": {1, 2}, "neg": {3}, "not_exhaustive": {2}},
+          "b": {"height": 100, "width": 100, "categories": [1], "boxes": [[0, 0, 10, 10]], "masks": [None],
+                "pos": {1}, "neg": set(), "not_exhaustive": set()}}
+    PREDS = {"a": [{"category_id": 1, "confidence": 0.9, "bbox": [0, 0, 10, 10]},
+                   {"category_id": 1, "confidence": 0.8, "bbox": [1, 0, 10, 10]},   # duplicate -> FP
+                   {"category_id": 2, "confidence": 0.7, "bbox": [70, 70, 80, 80]},  # not exhaustive -> ignored
+                   {"category_id": 3, "confidence": 0.6, "bbox": [5, 5, 9, 9]},      # negative -> FP
+                   {"category_id": 4, "confidence": 0.5, "bbox": [5, 5, 9, 9]}],     # unverified -> ignored
+             "b": []}
+
+    def test_counts_and_flags_follow_the_federated_policy(self):
+        from src import lvis_evaluator as ev
+
+        per = ev.box_match_details(self.PREDS, self.GT)
+        self.assertEqual({k: (v["tp"], v["fp"], v["fn"]) for k, v in per.items()}, {"a": (1, 2, 2), "b": (0, 0, 1)})
+        self.assertEqual(per["a"]["gt_matched"], [True, False, False])
+        self.assertEqual(per["b"]["gt_matched"], [False])
+
+    def test_summed_counts_equal_the_official_box_metric(self):
+        from src import lvis_evaluator as ev
+
+        per = ev.box_match_details(self.PREDS, self.GT)
+        report = ev.evaluate_federated(self.PREDS, self.GT, with_masks=False)["box"]
+        self.assertEqual(tuple(sum(v[k] for v in per.values()) for k in ("tp", "fp", "fn")),
+                         (report["tp"], report["fp"], report["fn"]))
 
 
 if __name__ == "__main__":

@@ -253,15 +253,22 @@ def detect_with_tiles(image, detect_fn, base_source: str = "owlv2",
 
 def merge_views(detections: list[Detection], width: int, height: int, tile_category_ids,
                 overlap: float = TILE_OVERLAP, edge_margin: float = TILE_EDGE_MARGIN, drop_truncated: bool = True,
+                tile_min_score: float = 0.0, tile_max_area_ratio: float | None = None,
                 nms_iou: float = NMS_IOU) -> list[Detection]:
     """Global detections + tile detections of the selected (small/medium) categories, minus boxes cut by an inner
-    tile border, then per-class NMS across views."""
+    tile border, then per-class NMS across views.
+
+    Tile views have their own score scale, so they get their own threshold (`tile_min_score`); `tile_max_area_ratio`
+    keeps only the small/medium boxes that tiling exists to rescue. Global detections pass through untouched."""
     tiles = tile_grid(width, height, overlap)
     kept = []
     for d in detections:
         idx = view_index(d.source)
         if idx is not None:
-            if d.category_id not in tile_category_ids:
+            if d.category_id not in tile_category_ids or d.score < tile_min_score:
+                continue
+            x1, y1, x2, y2 = d.bbox
+            if tile_max_area_ratio is not None and (x2 - x1) * (y2 - y1) / (width * height) >= tile_max_area_ratio:
                 continue
             if drop_truncated and touches_inner_edge(d.bbox, tiles[idx], width, height, edge_margin):
                 continue
