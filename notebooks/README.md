@@ -51,3 +51,33 @@ EXP-02A variants come out of the same pass. On CPU this takes ~70 s/img for Base
 on a T4. The runner resumes from `artifacts/cache_exp02/<backbone>/detections_<variant>.json.gz` (~7 MB per backbone),
 so a disconnected session can simply be re-run. Then copy `artifacts/cache_exp02/` back to the repository; the notebook
 `02_Perception_Ensemble_Tiling_EXP02.ipynb` runs from the cache on CPU.
+
+## EXP-02C (T4): calibrated multi-family ensemble + Submission #2
+
+Everything runs from one notebook: **`notebooks/kaggle/T4_EXP02C_runner.ipynb`**. Upload it to Kaggle (from the
+competition page, so the dataset is mounted) or open it in Colab. Set the accelerator to a **T4 GPU**, turn
+**Internet** on, and *Run all*. The runner works through these steps:
+
+1. Clones `feat/t4-ensemble-wbf` and runs the unit tests on the GPU box.
+2. Runs a 2-image MM-Grounding-DINO smoke test, then the full resumable pass:
+   `scripts/run_exp02_inference.py --backbone mmgdino_large` (`openmmlab-community/mm_grounding_dino_large_o365v2_oiv6_goldg`,
+   one forward per semantic block and view).
+3. Re-segments the EXP-01 boxes with SAM2.1 (for the paired Mask F1 comparison).
+4. Executes `02_Perception_Ensemble_Tiling_EXP02.ipynb` end to end. Sections 3-5 fit per-detector/per-view
+   calibration, anti-collision WBF and the sensitivity-group thresholds on CAL. They freeze
+   `artifacts/cache_exp02/exp02c/config.json`, segment those boxes with `scripts/run_exp02c_segmentation.py` (SAM2.1
+   Base+) and write `submissions/submission_exp02_perception.csv` (80 rows). Finally they run the 8-test suite with
+   live inference, QA and VRAM hooks.
+5. Packs `t4_outputs.zip`, containing the `mmgdino_large/` cache, `exp02c/`, the executed notebook and the submission.
+
+Back on the workstation, unzip `t4_outputs.zip` at the repository root. `exp02c/scenes.jsonl` (~40 MB) is
+git-ignored. `python scripts/build_notebook_02.py --refresh-markdown` inserts the written analyses into the
+GPU-executed notebook without re-running it.
+
+CPU code-path check without a GPU (OWLv2 Large stands in for MM-GDINO and masks are box fills; nothing it prints is a
+result, and it writes only to the git-ignored `artifacts/cache_exp02/exp02c_dryrun/`):
+
+```bash
+TPI_EXP02C_DRY_RUN=1 python scripts/build_notebook_02.py --execute \
+    --output artifacts/cache_exp02/exp02c_dryrun/nb02_dryrun.ipynb
+```

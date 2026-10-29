@@ -1,10 +1,12 @@
-"""Build (and optionally execute) notebooks/02_Perception_Ensemble_Tiling_EXP02.ipynb (Sections 1-2: EXP-02A/B).
+"""Build (and optionally execute) notebooks/02_Perception_Ensemble_Tiling_EXP02.ipynb.
 
-  python scripts/build_notebook_02.py            # write the notebook only
-  python scripts/build_notebook_02.py --execute  # write and execute it in place (outputs saved)
+  python scripts/build_notebook_02.py                     # write the notebook only
+  python scripts/build_notebook_02.py --execute           # write and execute it (outputs saved)
+  python scripts/build_notebook_02.py --refresh-markdown  # re-insert analysis Markdown into the executed notebook
+  TPI_EXP02C_DRY_RUN=1 python scripts/build_notebook_02.py --execute --output <path>   # CPU code-path check
 
-The notebook runs from the GPU detection caches in artifacts/cache_exp02/ (scripts/run_exp02_inference.py), so it
-executes on CPU. Sections 3-5 (EXP-02C) are appended by T4.
+Sections 1-2 (EXP-02A/B) run from the OWLv2 GPU caches on CPU. Sections 3-5 (EXP-02C, scripts/notebook_02_exp02c.py)
+need the MM-GDINO cache, and segment the frozen EXP-02C boxes with SAM2.1 on a GPU unless the scenes are cached.
 """
 
 from __future__ import annotations
@@ -15,6 +17,10 @@ from pathlib import Path
 
 import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from notebook_02_exp02c import EXP02C_CELLS  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 NOTEBOOK = REPO / "notebooks" / "02_Perception_Ensemble_Tiling_EXP02.ipynb"
@@ -58,6 +64,8 @@ ANNOTATIONS = json.loads(PATHS.annotations.read_text(encoding="utf-8"))  # evalu
 GT = ev.load_gt(ANNOTATIONS)
 SPLIT = cfg.load_split()
 CAL_KEYS = [f"tpi_{i:04d}" for i in SPLIT["cal"]]
+VAL_KEYS = [f"tpi_{i:04d}" for i in SPLIT["val"]]  # held out: only Sections 3-5 report it, never used for selection
+DEV_KEYS = CAL_KEYS + VAL_KEYS
 AREA_RATIO = {k: [float(m.sum()) / (g["height"] * g["width"]) for m in g["masks"]] for k, g in GT.items()}
 
 CACHE_DIR = REPO / "artifacts" / "cache_exp02"
@@ -85,7 +93,7 @@ display(pd.DataFrame([{"backbone": bb, "model": m["model"], "device": m["device"
 THRESHOLDS = np.round(np.arange(0.05, 0.601, 0.025), 3)
 TILE_THRESHOLDS = np.round(np.arange(0.15, 0.501, 0.025), 3)
 BUCKETS = ("small", "medium", "large")
-GT_BUCKET = {k: [cfg.size_from_area_ratio(a) for a in AREA_RATIO[k]] for k in CAL_KEYS}
+GT_BUCKET = {k: [cfg.size_from_area_ratio(a) for a in AREA_RATIO[k]] for k in DEV_KEYS}
 GROUPS = pdet.sibling_groups(cfg.CATEGORIES)
 METRICS = ["P", "R", "F1", "R_small", "R_medium", "R_large"]
 
@@ -98,19 +106,20 @@ def is_global(d):
     return pdet.view_index(d.source) is None
 
 
-def global_only(dets_by_key):
-    return {k: [d for d in dets_by_key[k] if is_global(d)] for k in CAL_KEYS}
+def global_only(dets_by_key, keys=None):
+    return {k: [d for d in dets_by_key[k] if is_global(d)] for k in (keys or CAL_KEYS)}
 
 
-def at_threshold(dets_by_key, thr):
-    return {k: [d for d in dets_by_key[k] if d.score >= thr] for k in CAL_KEYS}
+def at_threshold(dets_by_key, thr, keys=None):
+    return {k: [d for d in dets_by_key[k] if d.score >= thr] for k in (keys or CAL_KEYS)}
 
 
-def per_image_counts(dets_by_key):
+def per_image_counts(dets_by_key, keys=None):
     """[n_images, 9]: tp, fp, fn, then (matched, total) GT instances for small / medium / large."""
-    per = ev.box_match_details({k: as_preds(dets_by_key[k]) for k in CAL_KEYS}, GT)
+    keys = keys or CAL_KEYS
+    per = ev.box_match_details({k: as_preds(dets_by_key[k]) for k in keys}, GT)
     rows = []
-    for k in CAL_KEYS:
+    for k in keys:
         row = [per[k]["tp"], per[k]["fp"], per[k]["fn"]]
         for b in BUCKETS:
             flags = [hit for hit, s in zip(per[k]["gt_matched"], GT_BUCKET[k]) if s == b]
@@ -129,15 +138,16 @@ def metrics_from_sums(s):
     return out
 
 
-def summarize(dets_by_key, name, **extra):
-    counts = per_image_counts(dets_by_key)
+def summarize(dets_by_key, name, keys=None, **extra):
+    keys = keys or CAL_KEYS
+    counts = per_image_counts(dets_by_key, keys)
     m = metrics_from_sums(counts.sum(axis=0))
     return {"arm": name, **extra, **{k: float(m[k]) for k in METRICS},
-            "det/img": float(np.mean([len(dets_by_key[k]) for k in CAL_KEYS]))}
+            "det/img": float(np.mean([len(dets_by_key[k]) for k in keys]))}
 
 
-def sweep(make, thresholds):
-    return pd.DataFrame([{"threshold": float(t), **summarize(make(t), str(t))} for t in thresholds])
+def sweep(make, thresholds, keys=None):
+    return pd.DataFrame([{"threshold": float(t), **summarize(make(t), str(t), keys)} for t in thresholds])
 
 
 def bootstrap_delta(counts_a, counts_b, n_boot=1000, seed=cfg.SEED):
@@ -349,12 +359,12 @@ print(f"wrote {TILING_PATH.relative_to(REPO)}")
 ALL_CATEGORIES = set(cfg.CATEGORIES)
 
 
-def tiled(dets_by_key, global_thr, tile_thr, categories, gate, drop_truncated=True):
+def tiled(dets_by_key, global_thr, tile_thr, categories, gate, drop_truncated=True, keys=None):
     """Global view at its own threshold + tile views at theirs, merged by merge_views (filter, gate, NMS)."""
     return {k: pdet.merge_views([d for d in dets_by_key[k] if not is_global(d) or d.score >= global_thr],
                                 *SIZES[k], set(categories), drop_truncated=drop_truncated, tile_min_score=tile_thr,
                                 tile_max_area_ratio=cfg.MEDIUM_MAX_AREA_RATIO if gate else None)
-            for k in CAL_KEYS}
+            for k in (keys or CAL_KEYS)}
 
 
 def best_of(make, thresholds):
@@ -501,26 +511,53 @@ print(json.dumps(SUMMARY, indent=2))
 ]
 
 
+def _cell(kind: str, src: str):
+    if kind == "md":
+        cell = new_markdown_cell(md(src))
+        cell.metadata["analysis"] = src  # lets --refresh-markdown find it again in an executed copy
+        return cell
+    return new_code_cell(src.strip())
+
+
 def build() -> nbformat.NotebookNode:
     nb = new_notebook()
     nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3 (TPI .venv)", "language": "python"}
-    nb.cells = [new_markdown_cell(md(src)) if kind == "md" else new_code_cell(src.strip()) for kind, src in CELLS]
+    nb.cells = [_cell(kind, src) for kind, src in CELLS + EXP02C_CELLS]
+    return nb
+
+
+def refresh_markdown(path: Path) -> nbformat.NotebookNode:
+    """Replace the analysis Markdown of an already executed notebook, keeping every code cell and output as is."""
+    nb = nbformat.read(path, as_version=4)
+    expected = [src for kind, src in CELLS + EXP02C_CELLS if kind == "md"]
+    found = [c.metadata.get("analysis") for c in nb.cells if c.cell_type == "markdown"]
+    if found != expected:
+        raise ValueError(f"{path} does not have this builder's cell layout; rebuild and execute it instead")
+    for c in nb.cells:
+        if c.cell_type == "markdown":
+            c.source = md(c.metadata["analysis"])
     return nb
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--execute", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--execute", action="store_true")
+    mode.add_argument("--refresh-markdown", action="store_true")
+    parser.add_argument("--output", type=Path, default=NOTEBOOK)
     args = parser.parse_args(argv)
-    nb = build()
-    NOTEBOOK.parent.mkdir(parents=True, exist_ok=True)
-    if args.execute:
-        from nbclient import NotebookClient
+    if args.refresh_markdown:
+        nb = refresh_markdown(args.output)
+    else:
+        nb = build()
+        if args.execute:
+            from nbclient import NotebookClient
 
-        NotebookClient(nb, timeout=3600, kernel_name="python3",
-                       resources={"metadata": {"path": str(NOTEBOOK.parent)}}).execute()
-    nbformat.write(nb, NOTEBOOK)
-    print(f"wrote {NOTEBOOK}")
+            NotebookClient(nb, timeout=3600, kernel_name="python3",
+                           resources={"metadata": {"path": str(NOTEBOOK.parent)}}).execute()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    nbformat.write(nb, args.output)
+    print(f"wrote {args.output}")
     return 0
 
 
