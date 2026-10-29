@@ -146,3 +146,29 @@ Execute tasks `T1` through `T8` sequentially using the exact prompts and `/effor
 10. **Lineage:** `Detection` gains `raw_score: float | None = None` (last field); existing caches load unchanged.
 11. **Compute:** MM-GDINO inference and SAM2 run on a Kaggle/Colab T4 (the workstation has no CUDA); the GDINO forward
     path has no local automated test (Risk item 6), mitigated by a `--limit 2` smoke run before the full pass.
+
+### Results (T4 / S4) — Kaggle Tesla T4; CAL 80 in-sample, VAL 40 held out; 95% paired bootstrap (1,000 resamples, SEED 42)
+- **Second family:** MM-GDINO Large alone ~ OWLv2 Base (CAL tiled F1 0.6645 vs 0.6669, n.s.), but complementary. Oracle union small recall is 0.695 vs 0.585. MM-GDINO is much stronger on large objects (R_large 0.881 vs 0.800).
+- **Calibration:** the raw F1-optimal thresholds coincide (tau = 0.175 for both families, global view). What differs is the distribution shape: 22% vs 7% of CAL global detections score >= 0.3. Under NMS, calibration is neutral (C4 - C3 F1 +0.001, n.s.); it is needed for WBF's score sum.
+- **CAL ablation:**
+  - Ensemble vs OWLv2 alone: C6 - C1 F1 **+0.058 [+0.034, +0.079]**.
+  - WBF vs NMS: C6 - C4 F1 +0.016 (p = 0.051); R +4.8 pp and R_small +5.8 pp significant.
+  - Member set: Base+GDINO 0.7236 > Large+GDINO 0.7081; Base+Large+GDINO 0.7234 adds nothing. Selected: **OWLv2 Base + MM-GDINO**.
+- **Non-self-collision rule: inert.** 0 of 64,944 same-view same-class pairs reach IoU >= 0.55, because the per-view NMS at 0.5 already prevents collapse. The rule fires only via fused-box drift (3 boxes at the operating point on DEV) and changes no match. Kept as a tested invariant; no gain attributed.
+- **Groups:**
+  - micro 0.425 / standard 0.450. `fp_prone` is empty: verified-negative FPs are ~1% of box FPs (DEV: 6 for EXP-02B, 3 for EXP-02C).
+  - C7 - C6 F1 +0.004 (n.s.), R_small +2.4 pp (significant).
+- **S4 (VAL, held out): MET.** Box F1 EXP-01 0.6389 / EXP-02A 0.6364 / EXP-02B 0.6416 / **EXP-02C 0.6822**.
+  - vs EXP-01: +0.0434 [+0.013, +0.080]. vs EXP-02B: +0.0406 [+0.009, +0.079]; precision and recall rise together.
+  - CAL -> VAL optimism is 0.045, the largest of the four arms. The honest effect size is +0.04, not +0.07. The master-plan target of ">= +8 points" is not reached (+4.3 on VAL).
+- **Masks (SAM2.1 Base+, single mask, same as EXP-01):** VAL Mask F1 0.6198 -> 0.6655 (+0.0457 [+0.018, +0.083]); `0.40 Box + 0.35 Mask` +0.0333 [+0.013, +0.059]. 0 mask fallbacks over 6,850 objects; 92% of submitted objects are cross-family consensus boxes.
+- **Submission #2:** `submissions/submission_exp02_perception.csv`, 80 rows. Suite **8/8 PASS** on the GPU (live blind inference + VRAM hooks); 0 FAIL locally without hooks.
+- **Cost (T4, FP32):** OWLv2 Base 2.6 s + MM-GDINO Large 62.7 s (25 forwards; n = 150 traced, one resumed run lost the trace of 30 images) + SAM2 0.54 s + build 0.33 s ≈ 66 s/img; peak VRAM 8.3 GB.
+- **Frozen config:** `artifacts/cache_exp02/exp02c/config.json` (sha `912f09d78ec5dd6e`). The notebook's analysis Markdown was inserted with `build_notebook_02.py --refresh-markdown`; code cells and GPU outputs are untouched.
+
+### Notes for T5
+- Freeze the EXP-02C boxes by config sha `912f09d78ec5dd6e`. The fused detections are rebuilt blind by `scripts/run_exp02c_segmentation.fused_detections`. `exp02c/scenes.jsonl` (54 MB) is git-ignored: unzip it from the Kaggle outputs or regenerate it on a GPU.
+- Masks are now the weaker term (VAL Mask F1 0.666 vs Box F1 0.682) with 0 fallbacks: the gap is mask quality, which is exactly EXP-03's variable (SAM2.1 Large, `multimask_output=True`, box-aware selection).
+- MM-GDINO dominates latency. If time matters: FP16, or batch the 5 blocks of a view into one forward.
+- Open: the MM-GDINO alias variant was not run (`RUN_ALIAS = False`).
+- Operational gotcha: on this workstation `cat` and `ls` are aliased (`bat`, `eza`), so use `command cat` / Python for heredoc writes. Kaggle zips unpack into a `t4_outputs/` folder, not the repo root.

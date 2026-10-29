@@ -56,6 +56,7 @@
 ---
 
 ### Task T4: Perception `EXP-02C` — Calibrated Multi-Family Ensemble, Anti-Collision WBF, and Submission #2
+- **Status:** Done — S4 met (2026-10-29, branch `feat/t4-ensemble-wbf`; 131 unit tests OK; MM-GDINO Large + SAM2.1 on a Kaggle T4). **VAL Box F1 0.6822 > 0.60**; vs EXP-01 +0.0434 [+0.013, +0.080] and vs EXP-02B +0.0406 [+0.009, +0.079] (both significant); VAL Mask F1 +0.0457 [+0.018, +0.083]; suite 8/8 PASS on GPU (VRAM 8,326 MB). Ensemble = OWLv2 Base + MM-GDINO Large (OWLv2 Large selected out on CAL); the non-self-collision rule had no measurable effect (see handoff §6). Commits: `60947d5` (spec-challenge notes), `70de779` (MM-GDINO detector), `6a0b565` (calibration), `15041b1` (WBF + groups + config), `bf4521e` (segmentation runner), `29d26ba` (notebook §3-5 + Kaggle runner), `c5f481e` (executed notebook + caches + submission), docs commit follows
 - **Maps to:** `S4`
 - **Dependencies:** `T3`
 - **Risk Tier:** High (Core of the 40% `Box F1`)
