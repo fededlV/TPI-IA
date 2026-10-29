@@ -84,3 +84,17 @@ Execute tasks `T1` through `T8` sequentially using the exact prompts and `/effor
 - `scenes_thr0.175.jsonl` (39 MB) is git-ignored; regenerate with `python scripts/run_exp01_inference.py segment --threshold 0.175`.
 - Run T3+ on a GPU (Kaggle recommended): models auto-select CUDA via `config_and_seeds.resolve_device()`; see `notebooks/README.md`. With CUDA, the notebook passes the traced VRAM peak to suite Test 8.
 - Biggest levers measured: small-object recall (tiling), grounding of archaic names (`strap`, `cabinet`; also `elephant` raw 0.088), nested duplicates / over-split instances (`flowerpot`, `pillow`, `handbag`) hurting counts.
+
+---
+
+## 5. T3 Build Log (Claude Code — 2026-10-29, branch `feat/t3-perception-chunk-tiling`)
+
+### Spec-Challenge Notes (T3 / S3)
+1. **OWLv2 has no text "attention dilution" (non-blocking):** each query gets an independent logit (`modeling_owlv2.py`: per-query einsum; shift/scale depend on the image only). For OWLv2, chunking only changes the per-box label assignment: argmax within each block instead of across all 120 classes (up to 5 labels per box). One forward pass with the union of alias queries is mathematically identical to 5 chunked passes, so the 2x2 factorial (raw/alias x 1/5 blocks) costs a single image encoding. The token-saturation argument applies to GDINO-family models (256-token limit) in T4.
+2. **Alias collision (fixed in `config_and_seeds.py`):** `"door handle"` was listed under both `doorknob` and `handle`; ambiguous aliases (`glasses`, `t-shirt`, `watch strap`, bare `mouse`, `cap`, `sign`, `post`) also risked cross-class remaps. Invariant enforced: one prompt -> exactly one `category_id`.
+3. **"Statistically significant" (S3):** paired image-level bootstrap on CAL (1,000 resamples, SEED 42); a gain is significant when the 95% CI of the delta excludes 0. Thresholds are tuned per arm on CAL itself (optimistic); the held-out VAL comparison stays in T4 Section 3.
+4. **Size buckets:** rasterized GT mask `area_ratio` (same as EXP-01 `recall_by_bucket`): `small < 0.0035 <= medium < 0.035 <= large`.
+5. **Selective tiling subset:** categories whose CAL GT median `area_ratio < 0.035` (a training-side hyperparameter like the CAL threshold; never per-image; categories absent from CAL are included). The tile pass caches all 120 categories; the subset is applied offline and frozen to `artifacts/cache_exp02/tiling_categories.json`.
+6. **"25% overlap":** overlap = 25% of the tile side, so `tile = dim / 1.75`. Any object narrower than the overlap band (~14% of W/H) lies fully inside some tile without touching its inner edge, which makes the inner-edge truncation filter safe.
+7. **Edit surfaces beyond the T3 list (same pattern as T2):** `src/config_and_seeds.py` (aliases), `scripts/run_exp02_inference.py`, `scripts/build_notebook_02.py`, `notebooks/analysis_02/*.md`, `tests/test_perception_exp02.py`, `notebooks/README.md`.
+8. **Backbone (resolved by human):** OWLv2 Base (controlled link to EXP-01) and OWLv2 Large (cached for T4), both run on a Kaggle/Colab T4 GPU.
