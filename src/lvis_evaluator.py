@@ -101,24 +101,27 @@ def _prf(tp: int, fp: int, fn: int) -> dict:
 
 
 def evaluate_federated(predictions_by_image: dict[str, list[dict]], gt: dict[str, dict],
-                       iou_thr: float = IOU_THRESHOLD) -> dict:
-    """LVIS federated evaluation over the images present in both predictions and GT."""
-    counts = {"box": [0, 0, 0], "mask": [0, 0, 0]}
+                       iou_thr: float = IOU_THRESHOLD, with_masks: bool = True) -> dict:
+    """LVIS federated evaluation over the images present in both predictions and GT.
+
+    with_masks=False scores boxes only (predictions need no "mask"); the "mask" report is then None.
+    """
+    counts = {"box": [0, 0, 0], "mask": [0, 0, 0]} if with_masks else {"box": [0, 0, 0]}
     n_total = n_evaluated = 0
     images = [k for k in predictions_by_image if k in gt]
     for key in images:
         g, preds = gt[key], predictions_by_image[key]
         n_total += len(preds)
-        mask_cache = {id(p): sb.decode_rle(p["mask"]) for p in preds}
+        mask_cache = {id(p): sb.decode_rle(p["mask"]) for p in preds} if with_masks else {}
         for cid in sorted({p["category_id"] for p in preds} | g["pos"]):
             cat_preds = [p for p in preds if p["category_id"] == cid]
             if cid in g["pos"]:
                 n_evaluated += len(cat_preds)
                 idx = [i for i, c in enumerate(g["categories"]) if c == cid]
-                for kind, gts, fn in (
-                    ("box", [g["boxes"][i] for i in idx], lambda p, b: box_iou(p["bbox"], b)),
-                    ("mask", [g["masks"][i] for i in idx], lambda p, m: mask_iou(mask_cache[id(p)], m)),
-                ):
+                kinds = [("box", [g["boxes"][i] for i in idx], lambda p, b: box_iou(p["bbox"], b))]
+                if with_masks:
+                    kinds.append(("mask", [g["masks"][i] for i in idx], lambda p, m: mask_iou(mask_cache[id(p)], m)))
+                for kind, gts, fn in kinds:
                     tp, unmatched = _greedy_match(cat_preds, gts, fn, iou_thr)
                     counts[kind][0] += tp
                     counts[kind][1] += 0 if cid in g["not_exhaustive"] else unmatched
@@ -127,16 +130,20 @@ def evaluate_federated(predictions_by_image: dict[str, list[dict]], gt: dict[str
                 n_evaluated += len(cat_preds)
                 for kind in counts:
                     counts[kind][1] += len(cat_preds)
-    return {"images": len(images), "box": _prf(*counts["box"]), "mask": _prf(*counts["mask"]),
+    return {"images": len(images), "box": _prf(*counts["box"]),
+            "mask": _prf(*counts["mask"]) if with_masks else None,
             "coverage": n_evaluated / n_total if n_total else 0.0,
             "predictions_total": n_total, "predictions_evaluated": n_evaluated}
 
 
 def format_report(report: dict) -> str:
-    b, m = report["box"], report["mask"]
-    return (f"Box  P={b['precision']:.4f} R={b['recall']:.4f} F1={b['f1']:.4f} (TP={b['tp']} FP={b['fp']} FN={b['fn']})\n"
-            f"Mask P={m['precision']:.4f} R={m['recall']:.4f} F1={m['f1']:.4f} (TP={m['tp']} FP={m['fp']} FN={m['fn']})\n"
-            f"LVIS Evaluation Coverage={report['coverage']:.4f} over {report['images']} images")
+    lines = []
+    for label, r in (("Box ", report["box"]), ("Mask", report["mask"])):
+        if r is not None:
+            lines.append(f"{label} P={r['precision']:.4f} R={r['recall']:.4f} F1={r['f1']:.4f} "
+                         f"(TP={r['tp']} FP={r['fp']} FN={r['fn']})")
+    lines.append(f"LVIS Evaluation Coverage={report['coverage']:.4f} over {report['images']} images")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- verification suite
