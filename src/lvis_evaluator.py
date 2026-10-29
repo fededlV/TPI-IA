@@ -75,10 +75,9 @@ def mask_iou(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.logical_and(a, b).sum() / union) if union else 0.0
 
 
-def _greedy_match(preds: list[dict], gts: list[Any], iou_fn: Callable, iou_thr: float) -> tuple[int, int]:
-    """One-to-one greedy matching in descending confidence; returns (matched, unmatched_preds)."""
+def _greedy_assign(preds: list[dict], gts: list[Any], iou_fn: Callable, iou_thr: float) -> list[bool]:
+    """One-to-one greedy matching in descending confidence; returns which GT instances were matched."""
     taken = [False] * len(gts)
-    matched = 0
     for p in sorted(preds, key=lambda o: -o["confidence"]):
         best, best_iou = -1, iou_thr
         for g_idx, g in enumerate(gts):
@@ -89,7 +88,12 @@ def _greedy_match(preds: list[dict], gts: list[Any], iou_fn: Callable, iou_thr: 
                 best, best_iou = g_idx, iou
         if best >= 0:
             taken[best] = True
-            matched += 1
+    return taken
+
+
+def _greedy_match(preds: list[dict], gts: list[Any], iou_fn: Callable, iou_thr: float) -> tuple[int, int]:
+    """One-to-one greedy matching in descending confidence; returns (matched, unmatched_preds)."""
+    matched = sum(_greedy_assign(preds, gts, iou_fn, iou_thr))
     return matched, len(preds) - matched
 
 
@@ -134,6 +138,32 @@ def evaluate_federated(predictions_by_image: dict[str, list[dict]], gt: dict[str
             "mask": _prf(*counts["mask"]) if with_masks else None,
             "coverage": n_evaluated / n_total if n_total else 0.0,
             "predictions_total": n_total, "predictions_evaluated": n_evaluated}
+
+
+def box_match_details(predictions_by_image: dict[str, list[dict]], gt: dict[str, dict],
+                      iou_thr: float = IOU_THRESHOLD) -> dict[str, dict]:
+    """Box-only federated matching per image: tp/fp/fn (summing to evaluate_federated's box counts) and, aligned
+    with gt[key]["boxes"], whether each GT instance was matched. Feeds paired bootstraps and recall by size."""
+    out = {}
+    for key in (k for k in predictions_by_image if k in gt):
+        g, preds = gt[key], predictions_by_image[key]
+        tp = fp = fn = 0
+        flags = [False] * len(g["boxes"])
+        for cid in sorted({p["category_id"] for p in preds} | g["pos"]):
+            cat_preds = [p for p in preds if p["category_id"] == cid]
+            if cid in g["pos"]:
+                idx = [i for i, c in enumerate(g["categories"]) if c == cid]
+                taken = _greedy_assign(cat_preds, [g["boxes"][i] for i in idx],
+                                       lambda p, b: box_iou(p["bbox"], b), iou_thr)
+                for i, hit in zip(idx, taken):
+                    flags[i] = hit
+                tp += sum(taken)
+                fp += 0 if cid in g["not_exhaustive"] else len(cat_preds) - sum(taken)
+                fn += len(idx) - sum(taken)
+            elif cid in g["neg"]:
+                fp += len(cat_preds)
+        out[key] = {"tp": tp, "fp": fp, "fn": fn, "gt_matched": flags}
+    return out
 
 
 def format_report(report: dict) -> str:

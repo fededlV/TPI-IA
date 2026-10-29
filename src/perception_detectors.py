@@ -1,5 +1,5 @@
 """Open-vocabulary perception: OWLv2 detector (EXP-01 baseline, EXP-02A chunked prompting with LVIS aliases),
-EXP-02B 2x2 overlapping tiles, and model-free post-processing helpers.
+EXP-02B 2x2 overlapping tiles, the (MM-)Grounding-DINO family for EXP-02C, and model-free post-processing helpers.
 
 The detector receives only the image and the 120-category vocabulary; it never reads annotations.
 """
@@ -16,6 +16,10 @@ from src.lvis_evaluator import box_iou
 
 OWLV2_BASE = "google/owlv2-base-patch16-ensemble"
 OWLV2_LARGE = "google/owlv2-large-patch14-ensemble"
+MM_GDINO_LARGE = "openmmlab-community/mm_grounding_dino_large_o365v2_oiv6_goldg"  # zero-shot Swin-L checkpoint
+GDINO_BASE = "IDEA-Research/grounding-dino-base"
+GDINO_MIN_SCORE = 0.10  # raw cache floor for the GDINO family (its scores sit higher than OWLv2's)
+GDINO_MAX_TEXT_LEN = 256  # BERT text budget: the 120 classes only fit as 5 semantic blocks
 PROMPT_TEMPLATE = "a photo of a {}"
 DEFAULT_MIN_SCORE = 0.05  # raw cache floor; the operating threshold is tuned on CAL afterwards
 NMS_IOU = 0.5
@@ -61,6 +65,7 @@ class Detection:
     score: float
     bbox: tuple[float, float, float, float]  # xyxy, absolute pixels inside the image
     source: str = "owlv2"
+    raw_score: float | None = None  # detector score before EXP-02C calibration/fusion (lineage); None = uncalibrated
 
 
 @dataclass(frozen=True)
@@ -251,22 +256,99 @@ def detect_with_tiles(image, detect_fn, base_source: str = "owlv2",
     return out
 
 
-def merge_views(detections: list[Detection], width: int, height: int, tile_category_ids,
-                overlap: float = TILE_OVERLAP, edge_margin: float = TILE_EDGE_MARGIN, drop_truncated: bool = True,
-                nms_iou: float = NMS_IOU) -> list[Detection]:
+def filter_tile_views(detections: list[Detection], width: int, height: int, tile_category_ids,
+                      overlap: float = TILE_OVERLAP, edge_margin: float = TILE_EDGE_MARGIN, drop_truncated: bool = True,
+                      tile_min_score: float = 0.0, tile_max_area_ratio: float | None = None) -> list[Detection]:
     """Global detections + tile detections of the selected (small/medium) categories, minus boxes cut by an inner
-    tile border, then per-class NMS across views."""
+    tile border. No cross-view deduplication: merge_views adds NMS, EXP-02C fuses with WBF instead.
+
+    Tile views have their own score scale, so they get their own threshold (`tile_min_score`); `tile_max_area_ratio`
+    keeps only the small/medium boxes that tiling exists to rescue. Global detections pass through untouched."""
     tiles = tile_grid(width, height, overlap)
     kept = []
     for d in detections:
         idx = view_index(d.source)
         if idx is not None:
-            if d.category_id not in tile_category_ids:
+            if d.category_id not in tile_category_ids or d.score < tile_min_score:
+                continue
+            x1, y1, x2, y2 = d.bbox
+            if tile_max_area_ratio is not None and (x2 - x1) * (y2 - y1) / (width * height) >= tile_max_area_ratio:
                 continue
             if drop_truncated and touches_inner_edge(d.bbox, tiles[idx], width, height, edge_margin):
                 continue
         kept.append(d)
+    return kept
+
+
+def merge_views(detections: list[Detection], width: int, height: int, tile_category_ids,
+                overlap: float = TILE_OVERLAP, edge_margin: float = TILE_EDGE_MARGIN, drop_truncated: bool = True,
+                tile_min_score: float = 0.0, tile_max_area_ratio: float | None = None,
+                nms_iou: float = NMS_IOU) -> list[Detection]:
+    """filter_tile_views, then per-class NMS across views (EXP-02B)."""
+    kept = filter_tile_views(detections, width, height, tile_category_ids, overlap, edge_margin, drop_truncated,
+                             tile_min_score, tile_max_area_ratio)
     return per_class_nms(kept, nms_iou)
+
+
+# --------------------------------------------------------------------------- EXP-02C: Grounding-DINO prompt helpers
+
+
+def build_block_prompt(phrases: list[tuple[int, str]]) -> tuple[str, list[tuple[int, int, int]]]:
+    """GDINO text for one block, "a. b c. d.", and the (start, end, category_id) char span of every phrase."""
+    text, spans = "", []
+    for cid, phrase in phrases:
+        if text:
+            text += " "
+        spans.append((len(text), len(text) + len(phrase), cid))
+        text += phrase + "."
+    return text, spans
+
+
+def token_category_columns(offsets, spans: list[tuple[int, int, int]], category_ids: list[int]) -> np.ndarray:
+    """Column of `category_ids` owning each token (by char offsets), -1 for separators and special tokens.
+    Fails fast if a category ends up without tokens (e.g. truncated text)."""
+    col = {cid: j for j, cid in enumerate(category_ids)}
+    out = np.full(len(offsets), -1, dtype=int)
+    for t, (a, b) in enumerate(offsets):
+        if b > a:
+            owner = next((cid for start, end, cid in spans if start <= a and b <= end), None)
+            if owner is not None:
+                out[t] = col[owner]
+    missing = [cid for cid in category_ids if col[cid] not in out]
+    if missing:
+        raise ValueError(f"categories without text tokens: {missing}")
+    return out
+
+
+def encode_block_prompt(tokenizer, phrases: list[tuple[int, str]], category_ids: list[int],
+                        max_text_len: int = GDINO_MAX_TEXT_LEN) -> tuple[str, np.ndarray]:
+    """Block prompt text and its token -> category column map; raises if it exceeds the text-token budget."""
+    text, spans = build_block_prompt(phrases)
+    enc = tokenizer(text, return_offsets_mapping=True)
+    if len(enc["input_ids"]) > max_text_len:
+        raise ValueError(f"block prompt has {len(enc['input_ids'])} tokens > {max_text_len}: {text!r}")
+    return text, token_category_columns(enc["offset_mapping"], spans, category_ids)
+
+
+def token_scores_to_categories(token_probs: np.ndarray, columns: np.ndarray, n_categories: int) -> np.ndarray:
+    """[boxes, tokens] probabilities -> [boxes, categories]: max over each category's tokens."""
+    out = np.zeros((token_probs.shape[0], n_categories), dtype=token_probs.dtype)
+    for j in range(n_categories):
+        out[:, j] = token_probs[:, columns == j].max(axis=1)
+    return out
+
+
+def decode_block_outputs(logits: np.ndarray, pred_boxes: np.ndarray, columns: np.ndarray, category_ids: list[int],
+                         min_score: float, width: int, height: int, nms_iou: float = NMS_IOU,
+                         source: str = "gdino") -> list[Detection]:
+    """One GDINO forward ([queries, text positions] logits, normalized cxcywh boxes) -> labelled detections.
+    Text positions beyond the prompt are padding and ignored; boxes are relative to the (unpadded) image."""
+    probs = 1.0 / (1.0 + np.exp(-logits[:, :len(columns)]))
+    cx, cy, w, h = np.asarray(pred_boxes, dtype=float).T
+    boxes = np.stack([cx - 0.5 * w, cy - 0.5 * h, cx + 0.5 * w, cy + 0.5 * h], axis=1) * np.array(
+        [width, height, width, height], dtype=float)
+    cat = token_scores_to_categories(probs, columns, len(category_ids))
+    return label_boxes(cat, boxes, list(category_ids), [list(category_ids)], min_score, width, height, nms_iou, source)
 
 
 # --------------------------------------------------------------------------- detector
@@ -283,6 +365,7 @@ class OwlV2Detector:
 
         device = device or resolve_device()
         self.name = f"owlv2:{model_id}"
+        self.source, self.variants = "owlv2", VARIANTS
         self.model_id, self.device, self.min_score, self.nms_iou = model_id, device, min_score, nms_iou
         self.category_ids = sorted(categories)
         self.prompts = [PROMPT_TEMPLATE.format(categories[c]) for c in self.category_ids]
@@ -291,6 +374,10 @@ class OwlV2Detector:
         self._torch = torch
         self.processor = Owlv2Processor.from_pretrained(model_id)
         self.model = Owlv2ForObjectDetection.from_pretrained(model_id).to(device).eval()
+
+    def cache_meta(self) -> dict:
+        return {"model": self.model_id, "prompt_template": PROMPT_TEMPLATE, "min_score": self.min_score,
+                "nms_iou": self.nms_iou, "n_queries": len(self.query_table.prompts), "blocks": SEMANTIC_BLOCKS}
 
     def detect(self, image) -> list[Detection]:
         """Raw detections (score >= min_score) after per-class NMS, clipped to the image."""
@@ -329,3 +416,50 @@ class OwlV2Detector:
         scores, boxes = self.forward_scores(image)
         return extract_variants(scores, boxes, self.query_table, self.category_ids, self.blocks, self.min_score,
                                 width, height, self.nms_iou)
+
+
+class GroundingDinoDetector:
+    """(MM-)Grounding-DINO text-prompted detector: one forward per semantic block (the 120 classes exceed the
+    256-token text budget), per-block argmax labelling shared with OWLv2 (`label_boxes`)."""
+
+    def __init__(self, categories: dict[int, str], model_id: str = MM_GDINO_LARGE, device: str | None = None,
+                 min_score: float = GDINO_MIN_SCORE, nms_iou: float = NMS_IOU, use_aliases: bool = False,
+                 aliases: dict[int, dict] | None = None):
+        import torch
+        from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+        device = device or resolve_device()
+        self.source = "mmgdino" if "mm_grounding_dino" in model_id else "gdino"
+        self.name = f"{self.source}:{model_id}"
+        self.model_id, self.device, self.min_score, self.nms_iou = model_id, device, min_score, nms_iou
+        self.variant = "chunked_alias" if use_aliases else "chunked_raw"
+        self.variants = (self.variant,)
+        aliases = aliases if aliases is not None else build_prompt_aliases(categories)
+        self.blocks = build_blocks(categories)
+        self._torch = torch
+        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device).eval()
+        self.block_prompts = {}
+        for name, ids in self.blocks.items():
+            phrases = [(cid, p) for cid in ids for p in (aliases[cid]["prompts"] if use_aliases else [categories[cid]])]
+            self.block_prompts[name] = (ids, *encode_block_prompt(self.processor.tokenizer, phrases, ids))
+
+    def cache_meta(self) -> dict:
+        return {"model": self.model_id, "min_score": self.min_score, "nms_iou": self.nms_iou,
+                "prompts": {name: text for name, (_, text, _) in self.block_prompts.items()},
+                "n_text_tokens": {name: len(cols) for name, (_, _, cols) in self.block_prompts.items()}}
+
+    def detect_variants(self, image) -> dict[str, list[Detection]]:
+        image = image.convert("RGB")
+        width, height = image.size
+        detections = []
+        for ids, text, columns in self.block_prompts.values():
+            inputs = self.processor(images=image, text=text, return_tensors="pt").to(self.device)
+            if inputs["input_ids"].shape[1] != len(columns):
+                raise RuntimeError("processor tokenization differs from the precomputed token -> category map")
+            with self._torch.inference_mode():
+                outputs = self.model(**inputs)
+            detections += decode_block_outputs(outputs.logits[0].float().cpu().numpy(),
+                                               outputs.pred_boxes[0].float().cpu().numpy(), columns, ids,
+                                               self.min_score, width, height, self.nms_iou, self.source)
+        return {self.variant: per_class_nms(detections, self.nms_iou)}

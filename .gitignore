@@ -4,3 +4,5 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 artifacts/cache_exp01/scenes_thr*.jsonl
+artifacts/cache_exp02/exp02c/scenes.jsonl
+artifacts/cache_exp02/exp02c_dryrun/

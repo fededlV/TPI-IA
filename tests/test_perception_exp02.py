@@ -216,10 +216,78 @@ class TestTiledInference(unittest.TestCase):
         kept_raw = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2}, drop_truncated=False)
         self.assertGreater(len(kept_raw), len(merged))
 
+    def test_tile_views_have_their_own_threshold_and_size_gate(self):
+        dets = [Detection(1, 0.20, (100.0, 100.0, 110.0, 110.0), "owlv2:global"),
+                Detection(2, 0.20, (100.0, 100.0, 110.0, 110.0), "owlv2:tile0"),   # below the tile threshold
+                Detection(3, 0.40, (100.0, 100.0, 110.0, 110.0), "owlv2:tile0"),   # small -> kept
+                Detection(4, 0.40, (10.0, 10.0, 300.0, 250.0), "owlv2:tile0")]     # large (0.23 of the image)
+        merged = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2, 3, 4}, tile_min_score=0.3,
+                                  tile_max_area_ratio=0.035)
+        self.assertEqual(sorted(d.category_id for d in merged), [1, 3])
+        loose = pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2, 3, 4})
+        self.assertEqual(sorted(d.category_id for d in loose), [1, 2, 3, 4])  # defaults keep the old behavior
+
+    def test_filter_tile_views_is_merge_views_without_nms(self):
+        dets = pdet.detect_with_tiles(self.image, _FakeVariantDetector())["single_raw"]
+        kept = pdet.filter_tile_views(dets, 640, 480, tile_category_ids={1, 2})
+        self.assertEqual(pdet.per_class_nms(kept), pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2}))
+        self.assertGreater(len(kept), len(pdet.merge_views(dets, 640, 480, tile_category_ids={1, 2})))
+
     def test_merge_ignores_tiles_for_categories_outside_the_subset(self):
         dets = pdet.detect_with_tiles(self.image, _FakeVariantDetector())["single_raw"]
         merged = pdet.merge_views(dets, 640, 480, tile_category_ids=set())
         self.assertEqual({d.source for d in merged}, {"owlv2:global"})
+
+
+class _FakeTokenizer:
+    """Word-level stand-in for BERT: [CLS] + one token per word or '.', + [SEP], with HF-style char offsets."""
+
+    def __call__(self, text, return_offsets_mapping=False):
+        import re
+        offsets = [(0, 0)] + [m.span() for m in re.finditer(r"[a-z]+|\.", text)] + [(0, 0)]
+        return {"input_ids": list(range(len(offsets))), "offset_mapping": offsets}
+
+
+class TestGroundingDinoPrompt(unittest.TestCase):
+    def test_block_prompt_records_one_char_span_per_phrase(self):
+        text, spans = pdet.build_block_prompt([(1, "person"), (2, "short pants"), (2, "shorts")])
+        self.assertEqual(text, "person. short pants. shorts.")
+        self.assertEqual(spans, [(0, 6, 1), (8, 19, 2), (21, 27, 2)])
+        self.assertEqual([text[a:b] for a, b, _ in spans], ["person", "short pants", "shorts"])
+
+    def test_tokens_map_to_category_columns_and_separators_to_minus_one(self):
+        text, spans = pdet.build_block_prompt([(5, "person"), (9, "short pants")])
+        offsets = _FakeTokenizer()(text)["offset_mapping"]  # [CLS] person . short pants . [SEP]
+        cols = pdet.token_category_columns(offsets, spans, [9, 5])
+        np.testing.assert_array_equal(cols, [-1, 1, -1, 0, 0, -1, -1])
+
+    def test_category_without_tokens_fails_fast(self):
+        _, spans = pdet.build_block_prompt([(1, "person")])
+        with self.assertRaises(ValueError):
+            pdet.token_category_columns([(0, 0), (0, 6), (0, 0)], spans, [1, 2])
+
+    def test_encode_block_enforces_the_text_token_budget(self):
+        pairs = [(1, "person"), (2, "shirt"), (3, "short pants")]
+        text, cols = pdet.encode_block_prompt(_FakeTokenizer(), pairs, [1, 2, 3], max_text_len=9)
+        self.assertEqual(len(cols), 9)
+        with self.assertRaises(ValueError):
+            pdet.encode_block_prompt(_FakeTokenizer(), pairs, [1, 2, 3], max_text_len=8)
+
+    def test_category_score_is_the_max_over_its_tokens(self):
+        probs = np.array([[0.9, 0.2, 0.5, 0.3, 0.7, 0.8, 0.9]])
+        cats = pdet.token_scores_to_categories(probs, np.array([-1, 1, -1, 0, 0, -1, -1]), 2)
+        np.testing.assert_allclose(cats, [[0.7, 0.2]])
+
+    def test_decoded_boxes_are_scaled_to_the_image_and_labelled_once_per_box(self):
+        cols = np.array([-1, 0, -1, 1, -1])
+        logits = np.full((3, 7), -9.0)  # padded text positions beyond len(cols) must be ignored
+        logits[0, 1], logits[1, 3], logits[2, 1] = 2.0, 0.0, -3.0   # sigmoid: 0.881, 0.5, 0.047
+        logits[:, 5:] = 9.0
+        boxes = np.array([[0.25, 0.5, 0.5, 1.0], [0.5, 0.5, 0.2, 0.2], [0.9, 0.9, 0.1, 0.1]])  # cxcywh, normalized
+        dets = pdet.decode_block_outputs(logits, boxes, cols, [7, 8], min_score=0.1, width=200, height=100,
+                                         source="mmgdino")
+        self.assertEqual([(d.category_id, round(d.score, 3), d.bbox, d.source) for d in dets],
+                         [(7, 0.881, (0.0, 0.0, 100.0, 100.0), "mmgdino"), (8, 0.5, (80.0, 40.0, 120.0, 60.0), "mmgdino")])
 
 
 class TestCompressedDetectionCache(unittest.TestCase):
@@ -238,6 +306,38 @@ class TestCompressedDetectionCache(unittest.TestCase):
         self.assertEqual(loaded, {"tpi_0001": [Detection(3, 0.1235, (1.2346, 2.0, 30.5, 40.0), "owlv2:tile2")],
                                   "test_0001": []})
         self.assertEqual(meta["image_sizes"], {"x": [4, 3]})
+
+
+class TestPerImageBoxMatching(unittest.TestCase):
+    """Per-image TP/FP/FN and per-GT match flags feed the paired bootstrap and the recall-by-size breakdown."""
+
+    GT = {"a": {"height": 100, "width": 100, "categories": [1, 1, 2], "boxes": [[0, 0, 10, 10], [50, 50, 60, 60],
+                                                                                [20, 20, 40, 40]],
+                "masks": [None] * 3, "pos": {1, 2}, "neg": {3}, "not_exhaustive": {2}},
+          "b": {"height": 100, "width": 100, "categories": [1], "boxes": [[0, 0, 10, 10]], "masks": [None],
+                "pos": {1}, "neg": set(), "not_exhaustive": set()}}
+    PREDS = {"a": [{"category_id": 1, "confidence": 0.9, "bbox": [0, 0, 10, 10]},
+                   {"category_id": 1, "confidence": 0.8, "bbox": [1, 0, 10, 10]},   # duplicate -> FP
+                   {"category_id": 2, "confidence": 0.7, "bbox": [70, 70, 80, 80]},  # not exhaustive -> ignored
+                   {"category_id": 3, "confidence": 0.6, "bbox": [5, 5, 9, 9]},      # negative -> FP
+                   {"category_id": 4, "confidence": 0.5, "bbox": [5, 5, 9, 9]}],     # unverified -> ignored
+             "b": []}
+
+    def test_counts_and_flags_follow_the_federated_policy(self):
+        from src import lvis_evaluator as ev
+
+        per = ev.box_match_details(self.PREDS, self.GT)
+        self.assertEqual({k: (v["tp"], v["fp"], v["fn"]) for k, v in per.items()}, {"a": (1, 2, 2), "b": (0, 0, 1)})
+        self.assertEqual(per["a"]["gt_matched"], [True, False, False])
+        self.assertEqual(per["b"]["gt_matched"], [False])
+
+    def test_summed_counts_equal_the_official_box_metric(self):
+        from src import lvis_evaluator as ev
+
+        per = ev.box_match_details(self.PREDS, self.GT)
+        report = ev.evaluate_federated(self.PREDS, self.GT, with_masks=False)["box"]
+        self.assertEqual(tuple(sum(v[k] for v in per.values()) for k in ("tp", "fp", "fn")),
+                         (report["tp"], report["fp"], report["fn"]))
 
 
 if __name__ == "__main__":

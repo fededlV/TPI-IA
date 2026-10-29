@@ -29,7 +29,8 @@ def build_scene(image_id: str, image: Image.Image, detections: list[Detection], 
         objects.append(sb.build_object(obj_id, det.category_id, det.score, det.bbox, mask, image_rgb=rgb,
                                        category_name=categories.get(det.category_id), detector_source=det.source))
         if tracer is not None:
-            tracer.trace_object(image_id, obj_id, detector_source=det.source, raw_score=det.score,
+            tracer.trace_object(image_id, obj_id, detector_source=det.source,
+                                raw_score=det.score if det.raw_score is None else det.raw_score,
                                 calibrated_score=det.score, sam2_candidate_idx=0, sam2_iou_score=sam_score,
                                 mask_fallback="mask_fallback" in objects[-1])
     n_fallback = sum("mask_fallback" in o for o in objects)
